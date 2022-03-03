@@ -149,7 +149,7 @@ BENCHMARK(i64_division_by_constexpr);
         bm::DoNotOptimize(__builtin_popcount(++a));
 }
 
-BENCHMARK(u64_population_count)->MinTime(10);
+BENCHMARK(u64_population_count);
 
 [[gnu::target("popcnt")]] static void u64_population_count_x86(bm::State &state) {
     auto a = static_cast<uint64_t>(std::rand());
@@ -157,7 +157,39 @@ BENCHMARK(u64_population_count)->MinTime(10);
         bm::DoNotOptimize(__builtin_popcount(++a));
 }
 
-BENCHMARK(u64_population_count_x86)->MinTime(10);
+BENCHMARK(u64_population_count_x86);
+
+// ------------------------------------
+// ## Data Alignment
+// ------------------------------------
+
+constexpr size_t f32s_in_cacheline_k = 64 / sizeof(float);
+constexpr size_t f32s_in_halfline_k = f32s_in_cacheline_k / 2;
+
+struct alignas(64) f32_array_t {
+    float raw[f32s_in_cacheline_k * 2];
+};
+
+static void f32_pairwise_accumulation(bm::State &state) {
+    f32_array_t a, b, c;
+    for (auto _ : state)
+        for (size_t i = f32s_in_halfline_k; i != f32s_in_halfline_k * 3; ++i)
+            bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
+}
+
+static void f32_pairwise_accumulation_aligned(bm::State &state) {
+    f32_array_t a, b, c;
+    for (auto _ : state)
+        for (size_t i = 0; i != f32s_in_halfline_k; ++i)
+            bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
+}
+
+// Split load occurs in the first case and doesn't in the second.
+// We do the same number of arithmetical operations, but:
+//      - first takes 8 ns
+//      - second takes 4 ns
+BENCHMARK(f32_pairwise_accumulation)->MinTime(10);
+BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
 
 // ------------------------------------
 // ## Enough with nano-second stuff!

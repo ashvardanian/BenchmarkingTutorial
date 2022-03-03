@@ -169,8 +169,6 @@ static void sorting(bm::State &state) {
 
     std::vector<int32_t> array(count);
     std::iota(array.begin(), array.end(), 1);
-    std::random_device rd;
-    std::mt19937 gen(rd());
 
     for (auto _ : state) {
 
@@ -248,7 +246,7 @@ BENCHMARK_TEMPLATE(sorting_template, true)->Arg(4);
 // ### And learn the rest of relevant functionality in the process
 // ------------------------------------
 
-template <typename execution_policy_t> static void scaling_sorting(bm::State &state, execution_policy_t &&policy) {
+template <typename execution_policy_t> static void supersort(bm::State &state, execution_policy_t &&policy) {
 
     auto count = static_cast<size_t>(state.range(0));
     std::vector<int32_t> array(count);
@@ -270,13 +268,13 @@ template <typename execution_policy_t> static void scaling_sorting(bm::State &st
 
 // Let's try running on 1M to 16M entries.
 // This means input sizes between 4MB and 64MB respectively.
-BENCHMARK_CAPTURE(scaling_sorting, seq, std::execution::seq)
+BENCHMARK_CAPTURE(supersort, seq, std::execution::seq)
     ->RangeMultiplier(2)
     ->Range(1 << 20, 1 << 24)
     ->MinTime(10)
     ->Complexity(benchmark::oNLogN);
 
-BENCHMARK_CAPTURE(scaling_sorting, par_unseq, std::execution::par_unseq)
+BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
     ->RangeMultiplier(2)
     ->Range(1 << 20, 1 << 24)
     ->MinTime(10)
@@ -285,7 +283,7 @@ BENCHMARK_CAPTURE(scaling_sorting, par_unseq, std::execution::par_unseq)
 // Without `UseRealTime()`, CPU time is used by default.
 // Difference example: when you sleep your process it is no longer accumulating CPU time.
 // When you do syscall and switch contexts to create threads, you might face a problem here.
-BENCHMARK_CAPTURE(scaling_sorting, par_unseq, std::execution::par_unseq)
+BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
     ->RangeMultiplier(2)
     ->Range(1 << 20, 1 << 24)
     ->MinTime(10)

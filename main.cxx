@@ -3,6 +3,7 @@
 #include <cstdint>   // `int32_t`
 #include <cstdlib>   // `std::rand`
 #include <execution> // `std::execution::par_unseq`
+#include <new>       // `std::launder`
 #include <random>    // `std::mt19937`
 #include <vector>    // `std::algorithm`
 
@@ -81,7 +82,8 @@ static void f64_sin_maclaurin_powless(bm::State &state) {
 // Instead of using the heavy generic operation - describe your special case to the compiler!
 BENCHMARK(f64_sin_maclaurin_powless);
 
-__attribute__((optimize("-ffast-math"))) static void f64_sin_maclaurin_with_fast_math(bm::State &state) {
+// The old syntax in GCC is: __attribute__((optimize("-ffast-math")))
+[[gnu::optimize("-ffast-math")]] static void f64_sin_maclaurin_with_fast_math(bm::State &state) {
     double argument = std::rand(), result = 0;
     for (auto _ : state) {
         result = argument - (argument * argument * argument) / 6.0 +

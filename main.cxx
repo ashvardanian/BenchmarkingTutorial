@@ -303,14 +303,14 @@ template <typename execution_policy_t> static void supersort(bm::State &state, e
 // Let's try running on 1M to 16M entries.
 // This means input sizes between 4MB and 64MB respectively.
 BENCHMARK_CAPTURE(supersort, seq, std::execution::seq)
-    ->RangeMultiplier(2)
-    ->Range(1 << 20, 1 << 24)
+    ->RangeMultiplier(8)
+    ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
     ->Complexity(benchmark::oNLogN);
 
 BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
-    ->RangeMultiplier(2)
-    ->Range(1 << 20, 1 << 24)
+    ->RangeMultiplier(8)
+    ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
     ->Complexity(benchmark::oNLogN);
 
@@ -318,8 +318,8 @@ BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
 // Difference example: when you sleep your process it is no longer accumulating CPU time.
 // When you do syscall and switch contexts to create threads, you might face a problem here.
 BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
-    ->RangeMultiplier(2)
-    ->Range(1 << 20, 1 << 24)
+    ->RangeMultiplier(8)
+    ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
     ->Complexity(benchmark::oNLogN)
     ->UseRealTime();

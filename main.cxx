@@ -300,8 +300,8 @@ template <typename execution_policy_t> static void supersort(bm::State &state, e
     // state.counters["tempreture_on_mars"] = bm::Counter(-95.4);
 }
 
-// Let's try running on 1M to 16M entries.
-// This means input sizes between 4MB and 64MB respectively.
+// Let's try running on 1M to 4B entries.
+// This means input sizes between 4 MB and 16 GB respectively.
 BENCHMARK_CAPTURE(supersort, seq, std::execution::seq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)

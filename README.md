@@ -36,12 +36,12 @@ We run the same script on 2 different same-generation CPUs from AMD.
 
 In single-threaded workloads the 64-core variant was on average ~25% faster.
 
-![Epyc vs Threadripper]()
+![Epyc vs Threadripper](slides/epyc_vs_pro.png)
 
 Now let's isolate `supersort` on the Threadripper.
 Let's see the effect `-O3` optimizations level has over `-O1`.
 
-![O1 vs O3]()
+![O1 vs O3](slides/o1_vs_o3.png)
 
 Most notable, we have gained ~20% performance  in single-threaded sorting.
 

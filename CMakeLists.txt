@@ -28,7 +28,6 @@ if(NOT googlebenchmark_POPULATED)
     add_subdirectory(${googlebenchmark_SOURCE_DIR} ${googlebenchmark_BINARY_DIR})
 endif()
 
-
 # We need TBB for Parallel CPU Algorithms in GCC.
 # https://github.com/oneapi-src/oneTBB/blob/onetbb_2021/cmake/README.md
 FetchContent_Declare(
@@ -42,7 +41,6 @@ if(NOT TBB_POPULATED)
 endif()
 
 
-
 # Define the supported languages
 project(benchmarking_tutorial LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
@@ -53,7 +51,7 @@ set(CMAKE_CXX_EXTENSIONS NO)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -fopenmp")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3") # Fast by default :)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -Wno-unused-but-set-variable") # Less warnings
@@ -66,4 +64,8 @@ find_package(TBB)
 
 add_executable(main main.cxx)
 set_target_properties(main PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(main benchmark::benchmark Threads::Threads OpenMP::OpenMP_CXX TBB::tbb)
+target_link_libraries(main 
+    benchmark::benchmark
+    Threads::Threads
+    TBB::tbb
+)

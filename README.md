@@ -1,7 +1,9 @@
 # C++ Benchmarking Tutorial
 
 This repository is a practical example of common pitfalls in benchmarking high-performance applications.
-If you are interested in more advanced benchmarks - check out the [unum-cloud/ParallelReductions](https://github.com/unum-cloud/ParallelReductions) and the two following articles:
+It's extensively-commented [source](main.cxx) is also available in the [form of an article](https://unum.cloud/post/2022-03-04-gbench/).
+
+If you are interested in more advanced benchmarks - check out the [unum-cloud/ParallelReductions](https://github.com/unum-cloud/ParallelReductions) repo and the two following articles:
 
 * [879 GB/s Parallel Reductions in C++ & CUDA](https://unum.cloud/post/2022-01-28-reduce/).
 * [Failing to Reach DDR4 Bandwidth](https://unum.cloud/post/2022-01-29-ddr4/).
@@ -31,7 +33,7 @@ So running command changes to:
 
 We run the same script on 2 different same-generation CPUs from AMD.
 
-* One configuration used 2x Epyc AMD EPYC 7302 16-Core CPUs.
+* One configuration used 2x AMD EPYC 7302 16-Core CPUs.
 * Second one used AMD Threadripper PRO 3995WX
 
 In single-threaded workloads the 64-core variant was on average ~25% faster.

@@ -32,7 +32,7 @@ static void i32_addition_random(bm::State &state) {
 // Is integer addition really that expensive?
 BENCHMARK(i32_addition_random);
 
-static void i32_addition_random_and_used(bm::State &state) {
+static void i32_addition_semirandom(bm::State &state) {
     int32_t a = std::rand(), b = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) + (++b));
@@ -41,24 +41,31 @@ static void i32_addition_random_and_used(bm::State &state) {
 // We trigger the two `inc` instructions and the `add` on x86.
 // This shouldn't take more then 0.7 ns on a modern CPU.
 // So all the time spent - was in the `rand()`!
-BENCHMARK(i32_addition_random_and_used);
+BENCHMARK(i32_addition_semirandom);
 
 // Our `rand()` is 100 cycles on a single core, but it involves
 // global state management, so it can be as slow 12'000 ns with
 // just 8 threads.
 BENCHMARK(i32_addition_random)->Threads(8);
-BENCHMARK(i32_addition_random_and_used)->Threads(8);
+BENCHMARK(i32_addition_semirandom)->Threads(8);
 
 // ------------------------------------
 // ## Let's do some basic math
 // ### Maclaurin series
 // ------------------------------------
 
+static void f64_sin(bm::State &state) {
+    double argument = std::rand(), result = 0;
+    for (auto _ : state)
+        bm::DoNotOptimize(result = std::sin(argument += 1.0));
+}
+
 static void f64_sin_maclaurin(bm::State &state) {
     double argument = std::rand(), result = 0;
     for (auto _ : state) {
+        argument += 1.0;
         result = argument - std::pow(argument, 3) / 6 + std::pow(argument, 5) / 120;
-        bm::DoNotOptimize(result += argument += 1.0);
+        bm::DoNotOptimize(result);
     }
 }
 
@@ -67,14 +74,16 @@ static void f64_sin_maclaurin(bm::State &state) {
 // We will only take the first 3 parts of the expansion:
 //  sin(x) ~ x - (x^3) / 3! + (x^5) / 5!
 // https://en.wikipedia.org/wiki/Taylor_series
+BENCHMARK(f64_sin);
 BENCHMARK(f64_sin_maclaurin);
 
 static void f64_sin_maclaurin_powless(bm::State &state) {
     double argument = std::rand(), result = 0;
     for (auto _ : state) {
+        argument += 1.0;
         result = argument - (argument * argument * argument) / 6.0 +
                  (argument * argument * argument * argument * argument) / 120.0;
-        bm::DoNotOptimize(result += argument += 1.0);
+        bm::DoNotOptimize(result);
     }
 }
 
@@ -86,9 +95,10 @@ BENCHMARK(f64_sin_maclaurin_powless);
 [[gnu::optimize("-ffast-math")]] static void f64_sin_maclaurin_with_fast_math(bm::State &state) {
     double argument = std::rand(), result = 0;
     for (auto _ : state) {
+        argument += 1.0;
         result = argument - (argument * argument * argument) / 6.0 +
                  (argument * argument * argument * argument * argument) / 120.0;
-        bm::DoNotOptimize(result += argument += 1.0);
+        bm::DoNotOptimize(result);
     }
 }
 
@@ -225,13 +235,14 @@ BENCHMARK(sorting)->Args({4, false})->Args({4, true});
 
 static void upper_cost_of_branching(bm::State &state) {
     volatile int32_t a = std::rand();
-    volatile int32_t c = 0;
+    volatile int32_t b = std::rand(), c;
+    volatile bool prefer_addition;
     for (auto _ : state) {
-        volatile bool prefer_addition = (a * 2147483647 ^ c) % 2 == 0;
+        prefer_addition = ((a * b ^ c) & 1) == 0;
         if (prefer_addition)
-            c += ++a;
+            b *= (++a) * c;
         else
-            c -= ++a;
+            c -= (a = 3 * a + 1) & b;
     }
 }
 
@@ -306,22 +317,21 @@ BENCHMARK_CAPTURE(supersort, seq, std::execution::seq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
-    ->Complexity(benchmark::oNLogN);
+    ->Complexity(bm::oNLogN);
 
 BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
-    ->Complexity(benchmark::oNLogN);
+    ->Complexity(bm::oNLogN);
 
 // Without `UseRealTime()`, CPU time is used by default.
 // Difference example: when you sleep your process it is no longer accumulating CPU time.
-// When you do syscall and switch contexts to create threads, you might face a problem here.
 BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
-    ->Complexity(benchmark::oNLogN)
+    ->Complexity(bm::oNLogN)
     ->UseRealTime();
 
 // ------------------------------------

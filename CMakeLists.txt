@@ -60,12 +60,13 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -falign-functions=32") #
 # Add dependencies
 find_package(Threads REQUIRED)
 find_package(OpenMP)
-find_package(TBB)
+
 
 add_executable(main main.cxx)
 set_target_properties(main PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(main 
-    benchmark::benchmark
-    Threads::Threads
-    TBB::tbb
-)
+target_link_libraries(main pthread benchmark)
+
+if(NOT APPLE)
+    find_package(TBB)
+    target_link_libraries(main TBB)
+endif()

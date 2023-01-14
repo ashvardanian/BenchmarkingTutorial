@@ -233,9 +233,9 @@ static void sorting(bm::State &state) {
 BENCHMARK(sorting)->Args({3, false})->Args({3, true});
 BENCHMARK(sorting)->Args({4, false})->Args({4, true});
 
-static void upper_cost_of_branching(bm::State &state) {
+static void cost_of_branching(bm::State &state) {
     volatile int32_t a = std::rand();
-    volatile int32_t b = std::rand(), c;
+    volatile int32_t b = std::rand(), c = 0;
     volatile bool prefer_addition;
     for (auto _ : state) {
         prefer_addition = ((a * b ^ c) & 1) == 0;
@@ -246,9 +246,9 @@ static void upper_cost_of_branching(bm::State &state) {
     }
 }
 
-BENCHMARK(upper_cost_of_branching);
+BENCHMARK(cost_of_branching);
 
-static void upper_cost_of_pausing(bm::State &state) {
+static void cost_of_pausing(bm::State &state) {
     int32_t a = std::rand(), c = 0;
     for (auto _ : state) {
         state.PauseTiming();
@@ -258,7 +258,7 @@ static void upper_cost_of_pausing(bm::State &state) {
     }
 }
 
-BENCHMARK(upper_cost_of_pausing);
+BENCHMARK(cost_of_pausing);
 
 template <bool include_preprocessing_k> static void sorting_template(bm::State &state) {
 
@@ -311,6 +311,8 @@ template <typename execution_policy_t> static void supersort(bm::State &state, e
     // state.counters["tempreture_on_mars"] = bm::Counter(-95.4);
 }
 
+#ifdef __cpp_lib_parallel_algorithm
+
 // Let's try running on 1M to 4B entries.
 // This means input sizes between 4 MB and 16 GB respectively.
 BENCHMARK_CAPTURE(supersort, seq, std::execution::seq)
@@ -333,6 +335,8 @@ BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
     ->MinTime(10)
     ->Complexity(bm::oNLogN)
     ->UseRealTime();
+
+#endif
 
 // ------------------------------------
 // ## Practical Investigation Example

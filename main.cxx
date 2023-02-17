@@ -286,6 +286,95 @@ BENCHMARK_TEMPLATE(sorting_template, true)->Arg(3);
 BENCHMARK_TEMPLATE(sorting_template, false)->Arg(4);
 BENCHMARK_TEMPLATE(sorting_template, true)->Arg(4);
 
+template <typename element_at> //
+struct quick_sort_partition_gt {
+    using element_t = element_at;
+
+    std::int32_t operator()(element_t *arr, std::int32_t low, std::int32_t high) {
+        element_t pivot = arr[high];
+        std::int32_t i = low - 1;
+        for (std::int32_t j = low; j <= high - 1; j++) {
+            if (arr[j] >= pivot)
+                continue;
+            i++;
+            std::swap(arr[i], arr[j]);
+        }
+        std::swap(arr[i + 1], arr[high]);
+        return i + 1;
+    }
+};
+
+template <typename element_at> //
+struct quick_sort_recursive_gt {
+    using element_t = element_at;
+    using quick_sort_partition_t = quick_sort_partition_gt<element_t>;
+    using quick_sort_recursive_t = quick_sort_recursive_gt<element_t>;
+
+    void operator()(element_t *arr, std::int32_t low, std::int32_t high) {
+        if (low >= high)
+            return;
+        auto pivot = quick_sort_partition_t{}(arr, low, high);
+        quick_sort_recursive_t{}(arr, low, pivot - 1);
+        quick_sort_recursive_t{}(arr, pivot + 1, high);
+    }
+};
+
+template <typename element_at> //
+struct quick_sort_iterative_gt {
+    using element_t = element_at;
+    using quick_sort_partition_t = quick_sort_partition_gt<element_t>;
+
+    std::vector<std::int32_t> stack;
+
+    void operator()(element_t *arr, std::int32_t low, std::int32_t high) {
+
+        stack.resize((high - low + 1) * 2);
+        std::int32_t top = -1;
+
+        stack[++top] = low;
+        stack[++top] = high;
+
+        while (top >= 0) {
+            high = stack[top--];
+            low = stack[top--];
+            auto pivot = quick_sort_partition_t{}(arr, low, high);
+
+            // If there are elements on left side of pivot,
+            // then push left side to stack
+            if (low < pivot - 1) {
+                stack[++top] = low;
+                stack[++top] = pivot - 1;
+            }
+
+            // If there are elements on right side of pivot,
+            // then push right side to stack
+            if (pivot + 1 < high) {
+                stack[++top] = pivot + 1;
+                stack[++top] = high;
+            }
+        }
+    }
+};
+
+template <typename sorter_at, std::int32_t length_ak> //
+static void cost_of_recursion(bm::State &state) {
+    using element_t = typename sorter_at::element_t;
+    sorter_at sorter;
+    std::vector<element_t> arr(static_cast<std::size_t>(length_ak));
+    for (auto _ : state) {
+        for (std::int32_t i = 0; i != length_ak; ++i)
+            arr[i] = length_ak - i;
+        sorter(arr.data(), 0, length_ak - 1);
+    }
+}
+
+BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_recursive_gt<std::int32_t>, 1024);
+BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_iterative_gt<std::int32_t>, 1024);
+BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_recursive_gt<std::int32_t>, 1024 * 1024);
+BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_iterative_gt<std::int32_t>, 1024 * 1024);
+BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_recursive_gt<std::int32_t>, 1024 * 1024 * 1024);
+BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_iterative_gt<std::int32_t>, 1024 * 1024 * 1024);
+
 // ------------------------------------
 // ## Now that we know how fast algorithm works - lets scale it!
 // ### And learn the rest of relevant functionality in the process

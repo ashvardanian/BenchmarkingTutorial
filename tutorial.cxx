@@ -250,16 +250,9 @@ BENCHMARK(sorting)->Args({3, false})->Args({3, true});
 BENCHMARK(sorting)->Args({4, false})->Args({4, true});
 
 static void cost_of_branching(bm::State &state) {
-    volatile int32_t a = std::rand();
-    volatile int32_t b = std::rand(), c = 0;
-    volatile bool prefer_addition;
-    for (auto _ : state) {
-        prefer_addition = ((a * b ^ c) & 1) == 0;
-        if (prefer_addition)
-            b *= (++a) * c;
-        else
-            c -= (a = 3 * a + 1) & b;
-    }
+    int32_t a = std::rand(), b = std::rand(), c = 0;
+    for (auto _ : state)
+        bm::DoNotOptimize(c = (c & 1) ? ((a--) + (b)) : ((++b) - (a)));
 }
 
 BENCHMARK(cost_of_branching);

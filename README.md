@@ -66,13 +66,13 @@ sudo ./build_release/tutorial --benchmark_enable_random_interleaving=true --benc
 Alternatively, use the Linux `perf` tool for performance counter collection:
 
 ```sh
-sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=supersort
+sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=super_sort
 ```
 
 Example output on AMD Threadripper PRO 3995WX:
 
 ```sh
- Performance counter stats for 'taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=supersort':
+ Performance counter stats for 'taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=super_sort':
 
        23048674.55 msec task-clock                #   35.901 CPUs utilized          
            6627669      context-switches          #    0.288 K/sec                  

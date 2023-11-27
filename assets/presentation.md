@@ -42,7 +42,7 @@ Founder of [Unum.cloud](https://unum.cloud)
 sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF \
     ./release/main \
     --benchmark_enable_random_interleaving=true \
-    --benchmark_filter=supersort
+    --benchmark_filter=super_sort
 ```
 
 ---

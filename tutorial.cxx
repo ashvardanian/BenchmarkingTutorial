@@ -15,6 +15,9 @@ static void i32_addition(bm::State &state) {
     int32_t a = 0, b = 0, c = 0;
     for (auto _ : state)
         c = a + b;
+
+    // Silence "variable ‘c’ set but not used" warning
+    (void)c;
 }
 
 // The compiler will just optimize everything out.
@@ -26,13 +29,16 @@ static void i32_addition_random(bm::State &state) {
     int32_t c = 0;
     for (auto _ : state)
         c = std::rand() + std::rand();
+
+    // Silence "variable ‘c’ set but not used" warning
+    (void)c;
 }
 
 // This run in 25ns, or about 100 CPU cycles.
 // Is integer addition really that expensive?
 BENCHMARK(i32_addition_random);
 
-static void i32_addition_semirandom(bm::State &state) {
+static void i32_addition_semi_random(bm::State &state) {
     int32_t a = std::rand(), b = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) + (++b));
@@ -41,13 +47,13 @@ static void i32_addition_semirandom(bm::State &state) {
 // We trigger the two `inc` instructions and the `add` on x86.
 // This shouldn't take more then 0.7 ns on a modern CPU.
 // So all the time spent - was in the `rand()`!
-BENCHMARK(i32_addition_semirandom);
+BENCHMARK(i32_addition_semi_random);
 
 // Our `rand()` is 100 cycles on a single core, but it involves
 // global state management, so it can be as slow 12'000 ns with
 // just 8 threads.
 BENCHMARK(i32_addition_random)->Threads(8);
-BENCHMARK(i32_addition_semirandom)->Threads(8);
+BENCHMARK(i32_addition_semi_random)->Threads(8);
 
 // ------------------------------------
 // ## Let's do some basic math
@@ -189,24 +195,24 @@ BENCHMARK(u64_population_count_x86);
 // ## Data Alignment
 // ------------------------------------
 
-constexpr size_t f32s_in_cacheline_k = 64 / sizeof(float);
-constexpr size_t f32s_in_halfline_k = f32s_in_cacheline_k / 2;
+constexpr size_t f32s_in_cache_line_k = 64 / sizeof(float);
+constexpr size_t f32s_in_cache_line_half_k = f32s_in_cache_line_k / 2;
 
 struct alignas(64) f32_array_t {
-    float raw[f32s_in_cacheline_k * 2];
+    float raw[f32s_in_cache_line_k * 2];
 };
 
 static void f32_pairwise_accumulation(bm::State &state) {
     f32_array_t a, b, c;
     for (auto _ : state)
-        for (size_t i = f32s_in_halfline_k; i != f32s_in_halfline_k * 3; ++i)
+        for (size_t i = f32s_in_cache_line_half_k; i != f32s_in_cache_line_half_k * 3; ++i)
             bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
 }
 
 static void f32_pairwise_accumulation_aligned(bm::State &state) {
     f32_array_t a, b, c;
     for (auto _ : state)
-        for (size_t i = 0; i != f32s_in_halfline_k; ++i)
+        for (size_t i = 0; i != f32s_in_cache_line_half_k; ++i)
             bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
 }
 
@@ -218,8 +224,63 @@ BENCHMARK(f32_pairwise_accumulation)->MinTime(10);
 BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
 
 // ------------------------------------
-// ## Enough with nano-second stuff!
-// ### Lets do something bigger
+// ## Cost of Control Flow
+// ------------------------------------
+
+// The `if` statement and seemingly innocent ternary operator (condition ? a : b)
+// Can have a high for performance. It's especially noticeable, when conditional
+// execution is happening at the scale of single bytes, like in text processing,
+// parsing, search, compression, encoding, and so on.
+//
+// The CPU has a branch-predictor which is one of the most complex parts of the silicon.
+// It memorizes the most common `if` statements, to allow "speculative execution".
+// In other words, start processing the task (i + 1), before finishing the task (i).
+//
+// Those branch predictors are very powerful, and if you have a single `if` statement
+// on your hot-path, it's not a big deal. But most programs are almost entirely built
+// on `if` statements. On most modern CPUs up to 4096 branches will be memorized, but
+// anything that goes beyond that, would work slower - 2.9 ns vs 0.7 ns for the following snippet.
+static void cost_of_branching_for_different_depth(bm::State &state) {
+    auto count = static_cast<size_t>(state.range(0));
+    std::vector<int32_t> rands(count);
+    std::generate_n(rands.begin(), rands.size(), &std::rand);
+    int32_t c = 0;
+    size_t i = 0;
+    for (auto _ : state) {
+        int32_t r = rands[(++i) & (count - 1)];
+        bm::DoNotOptimize(c = (r & 1) ? (c + r) : (c * r));
+    }
+}
+
+BENCHMARK(cost_of_branching_for_different_depth)->RangeMultiplier(4)->Range(128, 32 * 1024);
+
+// We don't have to generate a large array of random numbers to showcase the cost of branching.
+// Simple one-line statement can be enough to cause the same 2.2 ns slowdown.
+static void cost_of_branching_without_random_arrays(bm::State &state) {
+    int32_t a = std::rand(), b = std::rand(), c = 0;
+    for (auto _ : state)
+        bm::DoNotOptimize(c = (c & 1) ? ((a--) + (b)) : ((++b) - (a)));
+}
+
+BENCHMARK(cost_of_branching_without_random_arrays);
+
+// Google Benchmark also provides it's own Control Flow primitives, to control timing.
+// Those `PauseTiming` and `ResumeTiming` functions, however, are not free.
+// In current implementation, they can easily take ~127 ns, or around 300 CPU cycles.
+static void cost_of_pausing(bm::State &state) {
+    int32_t a = std::rand(), c = 0;
+    for (auto _ : state) {
+        state.PauseTiming();
+        ++a;
+        state.ResumeTiming();
+        bm::DoNotOptimize(c += a);
+    }
+}
+
+BENCHMARK(cost_of_pausing);
+
+// ------------------------------------
+// ## Bulk Operations
 // ------------------------------------
 
 static void sorting(bm::State &state) {
@@ -248,26 +309,6 @@ static void sorting(bm::State &state) {
 // It's worst case complexity is ~O(N^2), but what the hell are those numbers??
 BENCHMARK(sorting)->Args({3, false})->Args({3, true});
 BENCHMARK(sorting)->Args({4, false})->Args({4, true});
-
-static void cost_of_branching(bm::State &state) {
-    int32_t a = std::rand(), b = std::rand(), c = 0;
-    for (auto _ : state)
-        bm::DoNotOptimize(c = (c & 1) ? ((a--) + (b)) : ((++b) - (a)));
-}
-
-BENCHMARK(cost_of_branching);
-
-static void cost_of_pausing(bm::State &state) {
-    int32_t a = std::rand(), c = 0;
-    for (auto _ : state) {
-        state.PauseTiming();
-        ++a;
-        state.ResumeTiming();
-        bm::DoNotOptimize(c += a);
-    }
-}
-
-BENCHMARK(cost_of_pausing);
 
 template <bool include_preprocessing_k> static void sorting_template(bm::State &state) {
 
@@ -389,7 +430,7 @@ BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_iterative_gt<std::int32_t>, 102
 // ### And learn the rest of relevant functionality in the process
 // ------------------------------------
 
-template <typename execution_policy_t> static void supersort(bm::State &state, execution_policy_t &&policy) {
+template <typename execution_policy_t> static void super_sort(bm::State &state, execution_policy_t &&policy) {
 
     auto count = static_cast<size_t>(state.range(0));
     std::vector<int32_t> array(count);
@@ -413,13 +454,13 @@ template <typename execution_policy_t> static void supersort(bm::State &state, e
 
 // Let's try running on 1M to 4B entries.
 // This means input sizes between 4 MB and 16 GB respectively.
-BENCHMARK_CAPTURE(supersort, seq, std::execution::seq)
+BENCHMARK_CAPTURE(super_sort, seq, std::execution::seq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
     ->Complexity(bm::oNLogN);
 
-BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
+BENCHMARK_CAPTURE(super_sort, par_unseq, std::execution::par_unseq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)
     ->MinTime(10)
@@ -427,7 +468,7 @@ BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
 
 // Without `UseRealTime()`, CPU time is used by default.
 // Difference example: when you sleep your process it is no longer accumulating CPU time.
-BENCHMARK_CAPTURE(supersort, par_unseq, std::execution::par_unseq)
+BENCHMARK_CAPTURE(super_sort, par_unseq, std::execution::par_unseq)
     ->RangeMultiplier(8)
     ->Range(1l << 20, 1l << 32)
     ->MinTime(10)

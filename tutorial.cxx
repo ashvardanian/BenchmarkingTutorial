@@ -91,12 +91,26 @@ static void f64_sin_maclaurin_powless(bm::State &state) {
 // Instead of using the heavy generic operation - describe your special case to the compiler!
 BENCHMARK(f64_sin_maclaurin_powless);
 
+// We want to recommend them to avoid all IEEE-754 compliance checks at a single-function level.
+// For that, "fast math" attributes can be used: https://simonbyrne.github.io/notes/fastmath/
+// The problem is, compilers define function attributes in different ways.
+//      -ffast-math (and included by -Ofast) in GCC and Clang
+//      -fp-model=fast (the default) in ICC
+//      /fp:fast in MSVC
+#if defined(__GNUC__) && !defined(__clang__)
 // The old syntax in GCC is: __attribute__((optimize("-ffast-math")))
-[[gnu::optimize("-ffast-math")]] static void f64_sin_maclaurin_with_fast_math(bm::State &state) {
+#define FAST_MATH [[gnu::optimize("-ffast-math")]]
+#elif defined(__clang__)
+#define FAST_MATH __attribute__((target("-ffast-math")))
+#else
+#define FAST_MATH
+#endif
+
+FAST_MATH static void f64_sin_maclaurin_with_fast_math(bm::State &state) {
     double argument = std::rand(), result = 0;
     for (auto _ : state) {
         argument += 1.0;
-        result = argument - (argument * argument * argument) / 6.0 +
+        result = (argument) - (argument * argument * argument) / 6.0 +
                  (argument * argument * argument * argument * argument) / 120.0;
         bm::DoNotOptimize(result);
     }
@@ -152,6 +166,7 @@ BENCHMARK(i64_division_by_constexpr);
 // ------------------------------------
 // ## Where else those tricks are needed
 // ------------------------------------
+#if defined(__GNUC__) && !defined(__clang__)
 
 [[gnu::target("default")]] static void u64_population_count(bm::State &state) {
     auto a = static_cast<uint64_t>(std::rand());
@@ -168,6 +183,7 @@ BENCHMARK(u64_population_count);
 }
 
 BENCHMARK(u64_population_count_x86);
+#endif
 
 // ------------------------------------
 // ## Data Alignment
@@ -397,7 +413,7 @@ template <typename execution_policy_t> static void supersort(bm::State &state, e
     state.SetBytesProcessed(count * state.iterations() * sizeof(int32_t));
 
     // Feel free to report something else:
-    // state.counters["tempreture_on_mars"] = bm::Counter(-95.4);
+    // state.counters["temperature_on_mars"] = bm::Counter(-95.4);
 }
 
 #ifdef __cpp_lib_parallel_algorithm

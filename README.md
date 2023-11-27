@@ -1,62 +1,78 @@
-# C++ Benchmarking Tutorial
+# C++ Benchmarking Tutorial using [Google Benchmark](https://github.com/google/benchmark)
 
 This repository is a practical example of common pitfalls in benchmarking high-performance applications.
-It's extensively-commented [source](main.cxx) is also available in the [form of an article](https://unum.cloud/post/2022-03-04-gbench/).
+It's extensively-commented [source](tutorial.cxx) is also available in a more digestible [article form](https://ashvardanian.com/posts/google-benchmark/).
 
-If you are interested in more advanced benchmarks - check out the [unum-cloud/ParallelReductions](https://github.com/unum-cloud/ParallelReductions) repo and the two following articles:
+### Quick Start Guide
 
-* [879 GB/s Parallel Reductions in C++ & CUDA](https://unum.cloud/post/2022-01-28-reduce/).
-* [Failing to Reach DDR4 Bandwidth](https://unum.cloud/post/2022-01-29-ddr4/).
-
-Run it with a single-line command:
+Clone the repository and execute the following commands to build and run the tutorial:
 
 ```sh
-mkdir -p release && cd release && cmake .. && make && ./main ; cd ..
+cmake -B ./build_release
+cmake --build ./build_release --config Release
+./build_release/tutorial
+
+# For JSON output
+./build_release/tutorial --benchmark_format=json
+
+# For output to a file
+./build_release/tutorial --benchmark_out=results.json
+
+# To match a specific benchmark
+./build_release/tutorial --benchmark_filter=i32_addition
 ```
 
-Dependencies will be fetched, but it's expected that you have a modern GCC compiler.
-Some parts of the tutorial will not work on LLVM, MSVC, ICC, NVCC and other compilers.
+### Compatibility and Special Features
 
-## Lesser known GBench features
+While primarily designed for GNU C Compiler, this tutorial is also compatible with Clang.
+Note that certain features may not work with LLVM, MSVC, ICC, NVCC, and other compilers.
+It includes practical demonstrations of Parallel STL in GCC, focusing on different `std::execution` policies in the `std::sort` algorithm.
+For advanced parallel algorithm benchmarks, see [ashvardanian/ParallelReductionsBenchmark](https://github.com/ashvardanian/ParallelReductionsBenchmark).
 
-* [Random Interleaving](https://github.com/google/benchmark/blob/main/docs/random_interleaving.md) with `--benchmark_enable_random_interleaving=true`.
-* [User-Requested Performance Counters](https://github.com/google/benchmark/blob/main/docs/perf_counters.md) via [`libpmf`](http://perfmon2.sourceforge.net/).
-* [Comparing with previous results](https://github.com/google/benchmark/blob/main/docs/tools.md) with `compare.py`.
+There are more articles on benchmarking in the ["Less Slow" blog](https://ashvardanian.com/tags/less-slow/):
 
-So running command changes to:
+- [Optimizing C++ & CUDA for High-Speed Parallel Reductions](https://ashvardanian.com/posts/cuda-parallel-reductions/)
+- [Challenges in Maximizing DDR4 Bandwidth](https://ashvardanian.com/posts/ddr4-bandwidth/)
+- [Comparing GCC Compiler and Manual Assembly Performance](https://ashvardanian.com/posts/gcc-12-vs-avx512fp16/)
+- [Enhancing SciPy Performance with AVX-512 & SVE](https://ashvardanian.com/posts/simsimd-faster-scipy/).
+
+### Advanced Google Benchmark Features
+
+#### Random Interleaving
+
+To enhance stability and reproducibility, use the `--benchmark_enable_random_interleaving=true` flag which shuffles and interleaves benchmarks as described [here](https://github.com/google/benchmark/blob/main/docs/random_interleaving.md).
 
 ```sh
-./release/main --benchmark_enable_random_interleaving=true --benchmark_format=json --benchmark_perf_counters="CYCLES,INSTRUCTIONS"
+./build_release/tutorial --benchmark_enable_random_interleaving=true
 ```
 
-## Let's `compare.py` our results
+### Benchmark Comparison
 
-We run the same script on 2 different same-generation CPUs from AMD.
+Utilize Google Benchmark's [`compare.py` tool](https://github.com/google/benchmark/blob/main/docs/tools.md) for CLI-based comparison of benchmarking results from different JSON files.
+The repository contains screenshots of the comparison of the following benchmarks:
 
-* One configuration used 2x AMD EPYC 7302 16-Core CPUs.
-* Second one used AMD Threadripper PRO 3995WX
+- AMD Threadripper PRO 3995WX against Dual AMD EPYC 7302 16-Core CPUs: [screenshot](assets/benchmarks_epyc_vs_pro.png)
+- AMD Threadripper PRO 3995WX with `-O3` vs `-O1` optimization levels: [screenshot](assets/benchmarks_o1_vs_o3.png)
 
-In single-threaded workloads the 64-core variant was on average ~25% faster.
+### Performance Counters with Google Benchmark
 
-![Epyc vs Threadripper](slides/epyc_vs_pro.png)
-
-Now let's isolate `supersort` on the Threadripper.
-Let's see the effect `-O3` optimizations level has over `-O1`.
-
-![O1 vs O3](slides/o1_vs_o3.png)
-
-Most notable, we have gained ~20% performance  in single-threaded sorting.
-
-## Perf Results for `supersort`
+Google Benchmark supports [User-Requested Performance Counters](https://github.com/google/benchmark/blob/main/docs/perf_counters.md) through `libpmf`.
+Note that collecting these may require `sudo` privileges.
 
 ```sh
-sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./release/main --benchmark_enable_random_interleaving=true --benchmark_filter=supersort
+sudo ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_format=json --benchmark_perf_counters="CYCLES,INSTRUCTIONS"
 ```
 
-The results on AMD Threadripper PRO 3995WX:
+Alternatively, use the Linux `perf` tool for performance counter collection:
 
 ```sh
- Performance counter stats for 'taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./release/main --benchmark_enable_random_interleaving=true --benchmark_filter=supersort':
+sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=supersort
+```
+
+Example output on AMD Threadripper PRO 3995WX:
+
+```sh
+ Performance counter stats for 'taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=supersort':
 
        23048674.55 msec task-clock                #   35.901 CPUs utilized          
            6627669      context-switches          #    0.288 K/sec                  

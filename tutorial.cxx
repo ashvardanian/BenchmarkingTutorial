@@ -228,7 +228,7 @@ BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
 // ------------------------------------
 
 // The `if` statement and seemingly innocent ternary operator (condition ? a : b)
-// Can have a high for performance. It's especially noticeable, when conditional
+// can have a high for performance. It's especially noticeable, when conditional
 // execution is happening at the scale of single bytes, like in text processing,
 // parsing, search, compression, encoding, and so on.
 //
@@ -242,17 +242,17 @@ BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
 // anything that goes beyond that, would work slower - 2.9 ns vs 0.7 ns for the following snippet.
 static void cost_of_branching_for_different_depth(bm::State &state) {
     auto count = static_cast<size_t>(state.range(0));
-    std::vector<int32_t> rands(count);
-    std::generate_n(rands.begin(), rands.size(), &std::rand);
-    int32_t c = 0;
-    size_t i = 0;
+    std::vector<int32_t> random_values(count);
+    std::generate_n(random_values.begin(), random_values.size(), &std::rand);
+    int32_t variable = 0;
+    size_t iteration = 0;
     for (auto _ : state) {
-        int32_t r = rands[(++i) & (count - 1)];
-        bm::DoNotOptimize(c = (r & 1) ? (c + r) : (c * r));
+        int32_t random = random_values[(++iteration) & (count - 1)];
+        bm::DoNotOptimize(variable = (random & 1) ? (variable + random) : (variable * random));
     }
 }
 
-BENCHMARK(cost_of_branching_for_different_depth)->RangeMultiplier(4)->Range(128, 32 * 1024);
+BENCHMARK(cost_of_branching_for_different_depth)->RangeMultiplier(4)->Range(256, 32 * 1024);
 
 // We don't have to generate a large array of random numbers to showcase the cost of branching.
 // Simple one-line statement can be enough to cause the same 2.2 ns slowdown.

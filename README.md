@@ -1,5 +1,7 @@
 # C++ Benchmarking Tutorial using [Google Benchmark](https://github.com/google/benchmark)
 
+[![Meme IEEE 754 vs GCC](assets/meme-ieee764-vs-gnu-compiler-cover.png)](https://ashvardanian.com/posts/google-benchmark/)
+
 This repository is a practical example of common pitfalls in benchmarking high-performance applications.
 It's extensively-commented [source](tutorial.cxx) is also available in a more digestible [article form](https://ashvardanian.com/posts/google-benchmark/).
 

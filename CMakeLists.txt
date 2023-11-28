@@ -5,27 +5,22 @@ include(FetchContent)
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG release-1.11.0)
-FetchContent_GetProperties(googletest)
-
-if(NOT googletest_POPULATED)
-  FetchContent_Populate(googletest)
-  add_subdirectory(${googletest_SOURCE_DIR} ${googletest_BINARY_DIR})
-endif()
+  GIT_TAG v1.14.0)
+FetchContent_MakeAvailable(googletest)
 
 # Fetch GBenchmark and surpress internal tests.
 # https://github.com/google/benchmark/blob/main/docs/user_guide.md#using-register-benchmark
 FetchContent_Declare(
   googlebenchmark
   GIT_REPOSITORY https://github.com/google/benchmark.git
-  GIT_TAG v1.6.1)
-set(BENCHMARK_ENABLE_TESTING off)
-FetchContent_GetProperties(googlebenchmark)
+  GIT_TAG v1.8.3)
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 
-if(NOT googlebenchmark_POPULATED)
-  FetchContent_Populate(googlebenchmark)
-  add_subdirectory(${googlebenchmark_SOURCE_DIR} ${googlebenchmark_BINARY_DIR})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(BENCHMARK_ENABLE_LIBPFM ON CACHE BOOL "" FORCE)
 endif()
+
+FetchContent_MakeAvailable(googlebenchmark)
 
 # We need TBB for Parallel CPU Algorithms in GCC.
 # https://github.com/oneapi-src/oneTBB/blob/onetbb_2021/cmake/README.md
@@ -70,6 +65,6 @@ add_executable(tutorial tutorial.cxx)
 set_target_properties(tutorial PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(tutorial pthread benchmark)
 
-if(NOT APPLE)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(tutorial TBB::tbb)
 endif()

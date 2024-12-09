@@ -35,8 +35,8 @@ FetchContent_MakeAvailable(googlebenchmark)
 # https://github.com/oneapi-src/oneTBB/blob/onetbb_2021/cmake/README.md
 FetchContent_Declare(
   TBB
-  GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-  GIT_TAG v2022.0.0)
+  GIT_REPOSITORY https://github.com/ashvardanian/oneTBB.git
+  GIT_TAG master)
 
 # Set the TBB_TEST option to OFF before making it available
 set(TBB_TEST OFF CACHE BOOL "Do not build TBB tests" FORCE)

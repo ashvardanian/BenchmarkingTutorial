@@ -1,23 +1,32 @@
 cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
+
+# Define the supported languages
+project(tutorial LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED YES)
+set(CMAKE_CXX_EXTENSIONS NO)
+
+# Load the dependencies
+set(FETCHCONTENT_QUIET OFF)
 include(FetchContent)
 
 # Fetch GTest, as its needed for GBenchmark https://stackoverflow.com/a/60417587
 FetchContent_Declare(
   googletest
   GIT_REPOSITORY https://github.com/google/googletest.git
-  GIT_TAG v1.14.0)
+  GIT_TAG v1.15.2)
 FetchContent_MakeAvailable(googletest)
 
-# Fetch GBenchmark and surpress internal tests.
+# Fetch GBenchmark and suppress internal tests.
 # https://github.com/google/benchmark/blob/main/docs/user_guide.md#using-register-benchmark
 FetchContent_Declare(
   googlebenchmark
   GIT_REPOSITORY https://github.com/google/benchmark.git
-  GIT_TAG v1.8.3)
+  GIT_TAG v1.9.1)
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  set(BENCHMARK_ENABLE_LIBPFM ON CACHE BOOL "" FORCE)
+  set(BENCHMARK_ENABLE_LIBPFM OFF CACHE BOOL "" FORCE)
 endif()
 
 FetchContent_MakeAvailable(googlebenchmark)
@@ -27,17 +36,12 @@ FetchContent_MakeAvailable(googlebenchmark)
 FetchContent_Declare(
   TBB
   GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-  GIT_TAG v2021.11.0)
+  GIT_TAG v2022.0.0)
 
 # Set the TBB_TEST option to OFF before making it available
 set(TBB_TEST OFF CACHE BOOL "Do not build TBB tests" FORCE)
 FetchContent_MakeAvailable(TBB)
 
-# Define the supported languages
-project(tutorial LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED YES)
-set(CMAKE_CXX_EXTENSIONS NO)
 
 # Make Release by default
 if(NOT CMAKE_BUILD_TYPE)

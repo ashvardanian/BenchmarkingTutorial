@@ -1,6 +1,6 @@
 #include <algorithm> // `std::sort`
 #include <cmath>     // `std::pow`
-#include <cstdint>   // `int32_t`
+#include <cstdint>   // `std::int32_t`
 #include <cstdlib>   // `std::rand`
 #include <execution> // `std::execution::par_unseq`
 #include <new>       // `std::launder`
@@ -12,7 +12,7 @@
 namespace bm = benchmark;
 
 static void i32_addition(bm::State &state) {
-    int32_t a = 0, b = 0, c = 0;
+    std::int32_t a = 0, b = 0, c = 0;
     for (auto _ : state)
         c = a + b;
 
@@ -26,7 +26,7 @@ static void i32_addition(bm::State &state) {
 BENCHMARK(i32_addition);
 
 static void i32_addition_random(bm::State &state) {
-    int32_t c = 0;
+    std::int32_t c = 0;
     for (auto _ : state)
         c = std::rand() + std::rand();
 
@@ -39,7 +39,7 @@ static void i32_addition_random(bm::State &state) {
 BENCHMARK(i32_addition_random);
 
 static void i32_addition_semi_random(bm::State &state) {
-    int32_t a = std::rand(), b = std::rand(), c = 0;
+    std::int32_t a = std::rand(), b = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) + (++b));
 }
@@ -135,7 +135,7 @@ BENCHMARK(f64_sin_maclaurin_with_fast_math);
 // ------------------------------------
 
 static void i64_division(bm::State &state) {
-    int64_t a = std::rand(), b = std::rand(), c = 0;
+    std::int64_t a = std::rand(), b = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) / (++b));
 }
@@ -145,8 +145,8 @@ static void i64_division(bm::State &state) {
 BENCHMARK(i64_division);
 
 static void i64_division_by_const(bm::State &state) {
-    int64_t b = 2147483647;
-    int64_t a = std::rand(), c = 0;
+    std::int64_t b = 2147483647;
+    std::int64_t a = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) / *std::launder(&b));
 }
@@ -158,8 +158,8 @@ static void i64_division_by_const(bm::State &state) {
 BENCHMARK(i64_division_by_const);
 
 static void i64_division_by_constexpr(bm::State &state) {
-    constexpr int64_t b = 2147483647;
-    int64_t a = std::rand(), c = 0;
+    constexpr std::int64_t b = 2147483647;
+    std::int64_t a = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) / b);
 }
@@ -195,8 +195,8 @@ BENCHMARK(u64_population_count_x86);
 // ## Data Alignment
 // ------------------------------------
 
-constexpr size_t f32s_in_cache_line_k = 64 / sizeof(float);
-constexpr size_t f32s_in_cache_line_half_k = f32s_in_cache_line_k / 2;
+constexpr std::size_t f32s_in_cache_line_k = 64 / sizeof(float);
+constexpr std::size_t f32s_in_cache_line_half_k = f32s_in_cache_line_k / 2;
 
 struct alignas(64) f32_array_t {
     float raw[f32s_in_cache_line_k * 2];
@@ -205,14 +205,14 @@ struct alignas(64) f32_array_t {
 static void f32_pairwise_accumulation(bm::State &state) {
     f32_array_t a, b, c;
     for (auto _ : state)
-        for (size_t i = f32s_in_cache_line_half_k; i != f32s_in_cache_line_half_k * 3; ++i)
+        for (std::size_t i = f32s_in_cache_line_half_k; i != f32s_in_cache_line_half_k * 3; ++i)
             bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
 }
 
 static void f32_pairwise_accumulation_aligned(bm::State &state) {
     f32_array_t a, b, c;
     for (auto _ : state)
-        for (size_t i = 0; i != f32s_in_cache_line_half_k; ++i)
+        for (std::size_t i = 0; i != f32s_in_cache_line_half_k; ++i)
             bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
 }
 
@@ -241,13 +241,13 @@ BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
 // on `if` statements. On most modern CPUs up to 4096 branches will be memorized, but
 // anything that goes beyond that, would work slower - 2.9 ns vs 0.7 ns for the following snippet.
 static void cost_of_branching_for_different_depth(bm::State &state) {
-    auto count = static_cast<size_t>(state.range(0));
-    std::vector<int32_t> random_values(count);
+    auto count = static_cast<std::size_t>(state.range(0));
+    std::vector<std::int32_t> random_values(count);
     std::generate_n(random_values.begin(), random_values.size(), &std::rand);
-    int32_t variable = 0;
-    size_t iteration = 0;
+    std::int32_t variable = 0;
+    std::size_t iteration = 0;
     for (auto _ : state) {
-        int32_t random = random_values[(++iteration) & (count - 1)];
+        std::int32_t random = random_values[(++iteration) & (count - 1)];
         bm::DoNotOptimize(variable = (random & 1) ? (variable + random) : (variable * random));
     }
 }
@@ -257,7 +257,7 @@ BENCHMARK(cost_of_branching_for_different_depth)->RangeMultiplier(4)->Range(256,
 // We don't have to generate a large array of random numbers to showcase the cost of branching.
 // Simple one-line statement can be enough to cause the same 2.2 ns slowdown.
 static void cost_of_branching_without_random_arrays(bm::State &state) {
-    int32_t a = std::rand(), b = std::rand(), c = 0;
+    std::int32_t a = std::rand(), b = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (c & 1) ? ((a--) + (b)) : ((++b) - (a)));
 }
@@ -268,7 +268,7 @@ BENCHMARK(cost_of_branching_without_random_arrays);
 // Those `PauseTiming` and `ResumeTiming` functions, however, are not free.
 // In current implementation, they can easily take ~127 ns, or around 300 CPU cycles.
 static void cost_of_pausing(bm::State &state) {
-    int32_t a = std::rand(), c = 0;
+    std::int32_t a = std::rand(), c = 0;
     for (auto _ : state) {
         state.PauseTiming();
         ++a;
@@ -285,10 +285,10 @@ BENCHMARK(cost_of_pausing);
 
 static void sorting(bm::State &state) {
 
-    auto count = static_cast<size_t>(state.range(0));
+    auto count = static_cast<std::size_t>(state.range(0));
     auto include_preprocessing = static_cast<bool>(state.range(1));
 
-    std::vector<int32_t> array(count);
+    std::vector<std::int32_t> array(count);
     std::iota(array.begin(), array.end(), 1);
 
     for (auto _ : state) {
@@ -312,8 +312,8 @@ BENCHMARK(sorting)->Args({4, false})->Args({4, true});
 
 template <bool include_preprocessing_k> static void sorting_template(bm::State &state) {
 
-    auto count = static_cast<size_t>(state.range(0));
-    std::vector<int32_t> array(count);
+    auto count = static_cast<std::size_t>(state.range(0));
+    std::vector<std::int32_t> array(count);
     std::iota(array.begin(), array.end(), 1);
 
     for (auto _ : state) {
@@ -432,8 +432,8 @@ BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_iterative_gt<std::int32_t>, 102
 
 template <typename execution_policy_t> static void super_sort(bm::State &state, execution_policy_t &&policy) {
 
-    auto count = static_cast<size_t>(state.range(0));
-    std::vector<int32_t> array(count);
+    auto count = static_cast<std::size_t>(state.range(0));
+    std::vector<std::int32_t> array(count);
     std::iota(array.begin(), array.end(), 1);
 
     for (auto _ : state) {
@@ -444,7 +444,7 @@ template <typename execution_policy_t> static void super_sort(bm::State &state, 
 
     state.SetComplexityN(count);
     state.SetItemsProcessed(count * state.iterations());
-    state.SetBytesProcessed(count * state.iterations() * sizeof(int32_t));
+    state.SetBytesProcessed(count * state.iterations() * sizeof(std::int32_t));
 
     // Feel free to report something else:
     // state.counters["temperature_on_mars"] = bm::Counter(-95.4);

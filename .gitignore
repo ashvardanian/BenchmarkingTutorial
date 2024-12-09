@@ -1,6 +1,6 @@
 release/
 debug/
-.vscode/
 build/
+build_debug/
 build_release/
 .DS_Store

@@ -1,0 +1,17 @@
+{
+  "cSpell.words": [
+    "ashvardanian",
+    "CUDA",
+    "Maclaurin",
+    "MSVC",
+    "NVCC",
+    "reorderable"
+  ],
+  "files.associations": {
+    "execution": "cpp",
+    "bitset": "cpp",
+    "chrono": "cpp",
+    "algorithm": "cpp",
+    "format": "cpp"
+  }
+}

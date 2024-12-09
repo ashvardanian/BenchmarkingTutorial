@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build: Debug",
+            "command": "cmake -D CMAKE_BUILD_TYPE=Debug -B build_debug && cmake --build build_debug --config Debug",
+            "args": [],
+            "type": "shell",
+            "osx": {
+                "environment": [
+                    {
+                        "name": "CXX",
+                        "value": "$(brew --prefix llvm)/bin/clang++"
+                    },
+                    {
+                        "name": "CC",
+                        "value": "$(brew --prefix llvm)/bin/clang"
+                    }
+                ]
+            }
+        }
+    ]
+}

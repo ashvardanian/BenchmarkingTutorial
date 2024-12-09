@@ -295,8 +295,8 @@ void f32_matrix_multiplication_4x4_loop_kernel(float a[4][4], float b[4][4], flo
 
 static void f32_matrix_multiplication_4x4_loop(bm::State &state) {
     float a[4][4], b[4][4], c[4][4];
-    std::generate_n(&a[0][0], 16, &std::rand);
-    std::generate_n(&b[0][0], 16, &std::rand);
+    std::iota(&a[0][0], &a[0][0] + 16, 16);
+    std::iota(&b[0][0], &b[0][0] + 16, 0);
     for (auto _ : state) {
         f32_matrix_multiplication_4x4_loop_kernel(a, b, c);
         bm::DoNotOptimize(c);
@@ -330,8 +330,8 @@ void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4
 
 static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
     float a[4][4], b[4][4], c[4][4];
-    std::generate_n(&a[0][0], 16, &std::rand);
-    std::generate_n(&b[0][0], 16, &std::rand);
+    std::iota(&a[0][0], &a[0][0] + 16, 16);
+    std::iota(&b[0][0], &b[0][0] + 16, 0);
     for (auto _ : state) {
         f32_matrix_multiplication_4x4_loop_unrolled_kernel(a, b, c);
         bm::DoNotOptimize(c);
@@ -341,6 +341,7 @@ static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
+#if defined(__SSE2__)
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC push_options
 #pragma GCC target("sse2", "sse3", "sse4.1")
@@ -348,7 +349,7 @@ static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
 #pragma clang attribute push(__attribute__((target("sse2,sse3,sse4.1"))), apply_to = function)
 #endif
 
-void f32_matrix_multiplication_4x4_loop_sse_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4], float c[4][4]) {
     __m128 a_row_0 = _mm_loadu_ps(&a[0][0]);
     __m128 a_row_1 = _mm_loadu_ps(&a[1][0]);
     __m128 a_row_2 = _mm_loadu_ps(&a[2][0]);
@@ -407,22 +408,91 @@ void f32_matrix_multiplication_4x4_loop_sse_kernel(float a[4][4], float b[4][4],
 #pragma clang attribute pop
 #endif
 
-static void f32_matrix_multiplication_4x4_loop_sse(bm::State &state) {
+static void f32_matrix_multiplication_4x4_loop_sse41(bm::State &state) {
     float a[4][4], b[4][4], c[4][4];
-    std::generate_n(&a[0][0], 16, &std::rand);
-    std::generate_n(&b[0][0], 16, &std::rand);
+    std::iota(&a[0][0], &a[0][0] + 16, 16);
+    std::iota(&b[0][0], &b[0][0] + 16, 0);
     for (auto _ : state) {
-        f32_matrix_multiplication_4x4_loop_sse_kernel(a, b, c);
+        f32_matrix_multiplication_4x4_loop_sse41_kernel(a, b, c);
         bm::DoNotOptimize(c);
     }
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
+#endif // defined(__SSE2__)
+
+#if defined(__AVX512F__)
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC target("avx2", "avx512f", "avx512bw", "avx512vl", "bmi2")
+#elif defined(__clang__)
+#pragma clang attribute push(__attribute__((target("avx2,avx512f,avx512bw,avx512vl,bmi2"))), apply_to = function)
+#endif
+
+void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+    __m512 a_mat = _mm512_loadu_ps(&a[0][0]);
+    __m512 b_mat = _mm512_loadu_ps(&b[0][0]);
+    __m512 c_mat = _mm512_setzero_ps();
+
+    // We need the following intrinsics to implement the matrix multiplication in AVX-512 efficiently:
+    //
+    // - `_mm512_permutexvar_ps` maps to `vpermps zmm, zmm, zmm`:
+    //      - On Intel Skylake-X: 3 cycle latency, port 5.
+    //      - On Intel Ice Lake: 3 cycle latency, port 5.
+    //      - On AMD Zen4: 6 cycle latency, ports: 1 and 2.
+    // - `_mm512_fmadd_ps` maps to `vfmadd231ps zmm, zmm, zmm`:
+    //      - On Intel Skylake-X: 4 cycle latency, ports: 0 and 5.
+    //      - On Intel Ice Lake: 4 cycle latency, port 0.
+    //      - On AMD Zen4: 4 cycle latency, ports: 0 and 1.
+    // - `_mm512_mul_ps` maps to `vmulps zmm, zmm, zmm`:
+    //      - On Intel Skylake-X: 4 cycle latency, ports: 0 and 5.
+    //      - On Intel Ice Lake: 4 cycle latency, port 0.
+    //      - On AMD Zen4: 3 cycle latency, ports: 0 and 1.
+    // - `_mm512_permute_ps` maps to `vpermilps zmm, zmm, imm8`:
+    //      - On Intel Skylake-X: 1 cycle latency, port 5.
+    //      - On Intel Ice Lake: 1 cycle latency, port 5.
+    //      - On AMD Zen4: 1 cycle latency, ports: 1, 2, 3.
+    //
+    __m512i b_transposition = _mm512_setr_epi32( //
+        15, 11, 7, 3,                            //
+        14, 10, 6, 2,                            //
+        13, 9, 5, 1,                             //
+        12, 8, 4, 0                              //
+    );
+    b_mat = _mm512_permutexvar_ps(b_transposition, b_mat);
+
+    _mm512_storeu_ps(&c[0][0], c_mat);
+}
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#elif defined(__clang__)
+#pragma clang attribute pop
+#endif
+
+static void f32_matrix_multiplication_4x4_loop_avx512(bm::State &state) {
+    float a[4][4], b[4][4], c[4][4];
+    std::iota(&a[0][0], &a[0][0] + 16, 16);
+    std::iota(&b[0][0], &b[0][0] + 16, 0);
+    for (auto _ : state) {
+        f32_matrix_multiplication_4x4_loop_avx512_kernel(a, b, c);
+        bm::DoNotOptimize(c);
+    }
+
+    std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
+    state.SetItemsProcessed(flops_per_cycle * state.iterations());
+}
+#endif // defined(__AVX512F__)
 
 BENCHMARK(f32_matrix_multiplication_4x4_loop);
 BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
-BENCHMARK(f32_matrix_multiplication_4x4_loop_sse);
+#if defined(__SSE2__)
+BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
+#endif
+#if defined(__AVX512F__)
+BENCHMARK(f32_matrix_multiplication_4x4_loop_avx512);
+#endif
 
 // ------------------------------------
 // ## Bulk Operations

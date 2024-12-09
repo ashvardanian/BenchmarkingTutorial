@@ -280,6 +280,71 @@ static void cost_of_pausing(bm::State &state) {
 BENCHMARK(cost_of_pausing);
 
 // ------------------------------------
+// ## Loop Unrolling
+// ------------------------------------
+
+void f32_matrix_multiplication_4x4_loop_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+    for (std::size_t i = 0; i != 4; ++i)
+        for (std::size_t j = 0; j != 4; ++j) {
+            float vector_product = 0;
+            for (std::size_t k = 0; k != 4; ++k)
+                vector_product += a[i][k] * b[k][j];
+            c[i][j] = vector_product;
+        }
+}
+
+static void f32_matrix_multiplication_4x4_loop(bm::State &state) {
+    float a[4][4], b[4][4], c[4][4];
+    std::generate_n(&a[0][0], 16, &std::rand);
+    std::generate_n(&b[0][0], 16, &std::rand);
+    for (auto _ : state) {
+        f32_matrix_multiplication_4x4_loop_kernel(a, b, c);
+        bm::DoNotOptimize(c);
+    }
+
+    std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
+    state.SetItemsProcessed(flops_per_cycle * state.iterations());
+}
+
+void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+    c[0][0] = a[0][0] * b[0][0] + a[0][1] * b[1][0] + a[0][2] * b[2][0] + a[0][3] * b[3][0];
+    c[0][1] = a[0][0] * b[0][1] + a[0][1] * b[1][1] + a[0][2] * b[2][1] + a[0][3] * b[3][1];
+    c[0][2] = a[0][0] * b[0][2] + a[0][1] * b[1][2] + a[0][2] * b[2][2] + a[0][3] * b[3][2];
+    c[0][3] = a[0][0] * b[0][3] + a[0][1] * b[1][3] + a[0][2] * b[2][3] + a[0][3] * b[3][3];
+
+    c[1][0] = a[1][0] * b[0][0] + a[1][1] * b[1][0] + a[1][2] * b[2][0] + a[1][3] * b[3][0];
+    c[1][1] = a[1][0] * b[0][1] + a[1][1] * b[1][1] + a[1][2] * b[2][1] + a[1][3] * b[3][1];
+    c[1][2] = a[1][0] * b[0][2] + a[1][1] * b[1][2] + a[1][2] * b[2][2] + a[1][3] * b[3][2];
+    c[1][3] = a[1][0] * b[0][3] + a[1][1] * b[1][3] + a[1][2] * b[2][3] + a[1][3] * b[3][3];
+
+    c[2][0] = a[2][0] * b[0][0] + a[2][1] * b[1][0] + a[2][2] * b[2][0] + a[2][3] * b[3][0];
+    c[2][1] = a[2][0] * b[0][1] + a[2][1] * b[1][1] + a[2][2] * b[2][1] + a[2][3] * b[3][1];
+    c[2][2] = a[2][0] * b[0][2] + a[2][1] * b[1][2] + a[2][2] * b[2][2] + a[2][3] * b[3][2];
+    c[2][3] = a[2][0] * b[0][3] + a[2][1] * b[1][3] + a[2][2] * b[2][3] + a[2][3] * b[3][3];
+
+    c[3][0] = a[3][0] * b[0][0] + a[3][1] * b[1][0] + a[3][2] * b[2][0] + a[3][3] * b[3][0];
+    c[3][1] = a[3][0] * b[0][1] + a[3][1] * b[1][1] + a[3][2] * b[2][1] + a[3][3] * b[3][1];
+    c[3][2] = a[3][0] * b[0][2] + a[3][1] * b[1][2] + a[3][2] * b[2][2] + a[3][3] * b[3][2];
+    c[3][3] = a[3][0] * b[0][3] + a[3][1] * b[1][3] + a[3][2] * b[2][3] + a[3][3] * b[3][3];
+}
+
+static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
+    float a[4][4], b[4][4], c[4][4];
+    std::generate_n(&a[0][0], 16, &std::rand);
+    std::generate_n(&b[0][0], 16, &std::rand);
+    for (auto _ : state) {
+        f32_matrix_multiplication_4x4_loop_unrolled_kernel(a, b, c);
+        bm::DoNotOptimize(c);
+    }
+
+    std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
+    state.SetItemsProcessed(flops_per_cycle * state.iterations());
+}
+
+BENCHMARK(f32_matrix_multiplication_4x4_loop);
+BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
+
+// ------------------------------------
 // ## Bulk Operations
 // ------------------------------------
 

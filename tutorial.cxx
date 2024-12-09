@@ -341,8 +341,88 @@ static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC push_options
+#pragma GCC target("sse2", "sse3", "sse4.1")
+#elif defined(__clang__)
+#pragma clang attribute push(__attribute__((target("sse2,sse3,sse4.1"))), apply_to = function)
+#endif
+
+void f32_matrix_multiplication_4x4_loop_sse_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+    __m128 a_row_0 = _mm_loadu_ps(&a[0][0]);
+    __m128 a_row_1 = _mm_loadu_ps(&a[1][0]);
+    __m128 a_row_2 = _mm_loadu_ps(&a[2][0]);
+    __m128 a_row_3 = _mm_loadu_ps(&a[3][0]);
+
+    // Load the columns of the matrix B, by loading the 4 rows and then transposing with an SSE macro:
+    // https://randombit.net/bitbashing/posts/integer_matrix_transpose_in_sse2.html
+    __m128 b_col_0 = _mm_loadu_ps(&b[0][0]);
+    __m128 b_col_1 = _mm_loadu_ps(&b[1][0]);
+    __m128 b_col_2 = _mm_loadu_ps(&b[2][0]);
+    __m128 b_col_3 = _mm_loadu_ps(&b[3][0]);
+    _MM_TRANSPOSE4_PS(b_col_0, b_col_1, b_col_2, b_col_3);
+
+    // Multiply A rows by B columns and store the result in C.
+    // Use OR to aggregate dot products and store results
+    __m128 c_row_0 = _mm_or_ps(                //
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_0, b_col_0, 0xF1), //
+            _mm_dp_ps(a_row_0, b_col_1, 0xF2)),
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_0, b_col_2, 0xF4), //
+            _mm_dp_ps(a_row_0, b_col_3, 0xF8)));
+    _mm_storeu_ps(&c[0][0], c_row_0);
+
+    __m128 c_row_1 = _mm_or_ps(                //
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_1, b_col_0, 0xF1), //
+            _mm_dp_ps(a_row_1, b_col_1, 0xF2)),
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_1, b_col_2, 0xF4), //
+            _mm_dp_ps(a_row_1, b_col_3, 0xF8)));
+    _mm_storeu_ps(&c[1][0], c_row_1);
+
+    __m128 c_row_2 = _mm_or_ps(                //
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_2, b_col_0, 0xF1), //
+            _mm_dp_ps(a_row_2, b_col_1, 0xF2)),
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_2, b_col_2, 0xF4), //
+            _mm_dp_ps(a_row_2, b_col_3, 0xF8)));
+    _mm_storeu_ps(&c[2][0], c_row_2);
+
+    __m128 c_row_3 = _mm_or_ps(                //
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_3, b_col_0, 0xF1), //
+            _mm_dp_ps(a_row_3, b_col_1, 0xF2)),
+        _mm_or_ps(                             //
+            _mm_dp_ps(a_row_3, b_col_2, 0xF4), //
+            _mm_dp_ps(a_row_3, b_col_3, 0xF8)));
+    _mm_storeu_ps(&c[3][0], c_row_3);
+}
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC pop_options
+#elif defined(__clang__)
+#pragma clang attribute pop
+#endif
+
+static void f32_matrix_multiplication_4x4_loop_sse(bm::State &state) {
+    float a[4][4], b[4][4], c[4][4];
+    std::generate_n(&a[0][0], 16, &std::rand);
+    std::generate_n(&b[0][0], 16, &std::rand);
+    for (auto _ : state) {
+        f32_matrix_multiplication_4x4_loop_sse_kernel(a, b, c);
+        bm::DoNotOptimize(c);
+    }
+
+    std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
+    state.SetItemsProcessed(flops_per_cycle * state.iterations());
+}
+
 BENCHMARK(f32_matrix_multiplication_4x4_loop);
 BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
+BENCHMARK(f32_matrix_multiplication_4x4_loop_sse);
 
 // ------------------------------------
 // ## Bulk Operations

@@ -53,8 +53,8 @@ To enhance stability and reproducibility, use the `--benchmark_enable_random_int
 Utilize Google Benchmark's [`compare.py` tool](https://github.com/google/benchmark/blob/main/docs/tools.md) for CLI-based comparison of benchmarking results from different JSON files.
 The repository contains screenshots of the comparison of the following benchmarks:
 
-- AMD Threadripper PRO 3995WX against Dual AMD EPYC 7302 16-Core CPUs: [screenshot](assets/benchmarks_epyc_vs_pro.png)
-- AMD Threadripper PRO 3995WX with `-O3` vs `-O1` optimization levels: [screenshot](assets/benchmarks_o1_vs_o3.png)
+- AMD ThreadRipper PRO 3995WX against Dual AMD EPYC 7302 16-Core CPUs: [screenshot](assets/benchmarks_epyc_vs_pro.png)
+- AMD ThreadRipper PRO 3995WX with `-O3` vs `-O1` optimization levels: [screenshot](assets/benchmarks_o1_vs_o3.png)
 
 ### Performance Counters with Google Benchmark
 
@@ -71,7 +71,7 @@ Alternatively, use the Linux `perf` tool for performance counter collection:
 sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=super_sort
 ```
 
-Example output on AMD Threadripper PRO 3995WX:
+Example output on AMD ThreadRipper PRO 3995WX:
 
 ```sh
  Performance counter stats for 'taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF ./build_release/tutorial --benchmark_enable_random_interleaving=true --benchmark_filter=super_sort':

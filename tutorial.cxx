@@ -212,14 +212,16 @@ static void f32_pairwise_accumulation(bm::State &state) {
 static void f32_pairwise_accumulation_aligned(bm::State &state) {
     f32_array_t a, b, c;
     for (auto _ : state)
-        for (std::size_t i = 0; i != f32s_in_cache_line_half_k; ++i)
+        for (std::size_t i = 0; i != f32s_in_cache_line_half_k * 2; ++i)
             bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
 }
 
+// TODO: Resolve cache prefetching issues to ensure accurate benchmark results
+// after resolving https://github.com/ashvardanian/BenchmarkingTutorial/issues/1
+// Currently, this test does not show meaningful differences due to cache prefetching.
+
 // Split load occurs in the first case and doesn't in the second.
 // We do the same number of arithmetical operations, but:
-//      - first takes 8 ns
-//      - second takes 4 ns
 BENCHMARK(f32_pairwise_accumulation)->MinTime(10);
 BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
 

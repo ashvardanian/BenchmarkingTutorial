@@ -1,10 +1,9 @@
 #include <algorithm> // `std::sort`
 #include <cmath>     // `std::pow`
 #include <cstdint>   // `std::int32_t`
-#include <cstring>   // `std::memset`
+#include <random>    // `std::mt19937`
 #include <execution> // `std::execution::par_unseq`
 #include <new>       // `std::launder`
-#include <random>    // `std::mt19937`
 #include <vector>    // `std::algorithm`
 
 #include <benchmark/benchmark.h>

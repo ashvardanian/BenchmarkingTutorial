@@ -1,7 +1,7 @@
 #include <algorithm> // `std::sort`
 #include <cmath>     // `std::pow`
 #include <cstdint>   // `std::int32_t`
-#include <cstdlib>   // `std::rand`
+#include <cstring>   // `std::memset`
 #include <execution> // `std::execution::par_unseq`
 #include <new>       // `std::launder`
 #include <random>    // `std::mt19937`
@@ -195,35 +195,92 @@ BENCHMARK(u64_population_count_x86);
 // ## Data Alignment
 // ------------------------------------
 
-constexpr std::size_t f32s_in_cache_line_k = 64 / sizeof(float);
-constexpr std::size_t f32s_in_cache_line_half_k = f32s_in_cache_line_k / 2;
+// Accessing data unaligned with the cache line size can impact performance.
+// Loads and stores operate at cache line granularity (typically 64 bytes),
+// not at byte granularity.
+//
+// Measuring cache latency is a challenging task with many nuanced factors at play:
+// - Prefetchers anticipating access patterns and caching lines in advance.
+// - The behavior of the TLB (Translation Lookaside Buffer) cache, which may introduce noise.
+// - Memory ordering effects influenced by hardware and compiler optimizations.
+// - Even initializing an array with zeroes for benchmarking might be problematic
+//   due to zero-page optimizations and copy-on-write.
+//
+// This setup aligns the array to the page size to minimize noise from random TLB misses.
+// Consequently, it is assumed that the array is aligned to cache line boundaries for controlled measurements.
+constexpr size_t c8_page_size = 4096;
+constexpr size_t c8_in_page = c8_page_size / sizeof(char);
+// Caches may hide the performance impact;
+// ensure buffer sizes is big enough as L2 or even L3.
+constexpr size_t c8_buffer_size = 1 << 20;
+constexpr size_t c8_pages_in_buffer = c8_buffer_size / c8_page_size;
+constexpr size_t c8_in_buffer = c8_pages_in_buffer * c8_in_page;
+constexpr size_t cache_line_size = 64;
 
-struct alignas(64) f32_array_t {
-    float raw[f32s_in_cache_line_k * 2];
-};
-
-static void f32_pairwise_accumulation(bm::State &state) {
-    f32_array_t a, b, c;
-    for (auto _ : state)
-        for (std::size_t i = f32s_in_cache_line_half_k; i != f32s_in_cache_line_half_k * 3; ++i)
-            bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
+static std::mt19937 &random_generator() {
+    static std::random_device seed_source;
+    static std::mt19937 generator(seed_source());
+    return generator;
 }
 
-static void f32_pairwise_accumulation_aligned(bm::State &state) {
-    f32_array_t a, b, c;
+static void c8_pairwise_access_aligned(bm::State &state) {
+    char *buf = static_cast<char *>(std::aligned_alloc(c8_page_size, c8_buffer_size));
+    // This case might not apply here, but as a rule of thumb for benchmarking,
+    // avoid initializing arrays with zero to prevent runtime copy-on-write behavior for zero pages,
+    // as it may skew results.
+    std::fill(buf, buf + c8_in_buffer, 1);
+
+    // Initialize two arrays with numbres from [0-127] for paired access within the same cache line.
+    // Shuffle `el2` in two segments (0–63 and 64–126) for localized randomness.
+    size_t el1[cache_line_size * 2];
+    std::iota(std::begin(el1), std::end(el1), 0);
+    size_t el2[cache_line_size * 2];
+    std::iota(std::begin(el2), std::end(el2), 0);
+    std::shuffle(std::begin(el2), std::begin(el2) + cache_line_size, random_generator());
+    std::shuffle(std::begin(el2) + cache_line_size, std::end(el2), random_generator());
+
+    // Full memory barrier, considered to be portable.
+    __sync_synchronize();
     for (auto _ : state)
-        for (std::size_t i = 0; i != f32s_in_cache_line_half_k * 2; ++i)
-            bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
+        for (std::size_t page = 0; page < c8_pages_in_buffer; ++page) {
+            size_t idx = page % (cache_line_size * 2);
+            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el1[idx]));
+            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el2[idx]));
+        }
+    __sync_synchronize();
+    std::free(buf);
 }
 
-// TODO: Resolve cache prefetching issues to ensure accurate benchmark results
-// after resolving https://github.com/ashvardanian/BenchmarkingTutorial/issues/1
-// Currently, this test does not show meaningful differences due to cache prefetching.
+static void c8_pairwise_access_unaligned(bm::State &state) {
+    char *buf = static_cast<char *>(std::aligned_alloc(c8_page_size, c8_buffer_size));
+    std::fill(buf, buf + c8_in_buffer, 1);
 
-// Split load occurs in the first case and doesn't in the second.
-// We do the same number of arithmetical operations, but:
-BENCHMARK(f32_pairwise_accumulation)->MinTime(10);
-BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
+    // Initialize two arrays with numbers from [0–127]
+    // for paired access to different cache lines.
+    size_t el1[cache_line_size * 2];
+    std::iota(std::begin(el1), std::end(el1), 0);
+    size_t el2[cache_line_size * 2];
+    std::iota(std::begin(el2), std::begin(el2) + cache_line_size, cache_line_size);
+    std::iota(std::begin(el2) + cache_line_size, std::end(el2), 0);
+    std::shuffle(std::begin(el2), std::begin(el2) + cache_line_size, random_generator());
+    std::shuffle(std::begin(el2) + cache_line_size, std::end(el2), random_generator());
+
+    __sync_synchronize();
+    for (auto _ : state)
+        for (std::size_t page = 0; page < c8_pages_in_buffer; ++page) {
+            size_t idx = page % (cache_line_size * 2);
+            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el1[idx]));
+            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el2[idx]));
+        }
+    __sync_synchronize();
+    std::free(buf);
+}
+
+// Split load occurs in the second case but not in the first.
+// While the number of access operations is the same,
+// crossing 64-byte cache-line boundaries can be significantly slower.
+BENCHMARK(c8_pairwise_access_aligned)->MinTime(10);
+BENCHMARK(c8_pairwise_access_unaligned)->MinTime(10);
 
 // ------------------------------------
 // ## Cost of Control Flow
@@ -693,7 +750,6 @@ BENCHMARK_CAPTURE(super_sort, par_unseq, std::execution::par_unseq)
     ->UseRealTime();
 
 #endif
-
 // ------------------------------------
 // ## Practical Investigation Example
 // ------------------------------------

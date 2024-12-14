@@ -229,7 +229,7 @@ static void c8_pairwise_access_aligned(bm::State &state) {
     // as it may skew results.
     std::fill(buf, buf + c8_in_buffer, 1);
 
-    // Initialize two arrays with numbres from [0-127] for paired access within the same cache line.
+    // Initialize two arrays with numbers from [0-127] for paired access within the same cache line.
     // Shuffle `el2` in two segments (0–63 and 64–126) for localized randomness.
     size_t el1[cache_line_size * 2];
     std::iota(std::begin(el1), std::end(el1), 0);

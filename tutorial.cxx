@@ -287,10 +287,13 @@ inline void mix_64_bytes(std::uint8_t *first_buffer, std::uint8_t const *second_
     first[7] ^= second[7];
 }
 
-static void pairwise_access_aligned(bm::State &state) {
+template <bool aligned> static void memory_access(bm::State &state) {
     memory_specs_t const memory_specs = fetch_memory_specs();
-    assert(memory_specs.l2_cache_size > 0 && __builtin_popcount(memory_specs.l2_cache_size) == 1 &&
-           "L2 cache size must be a power of two greater than 0");
+    assert(                                                      //
+        memory_specs.l2_cache_size > 0 &&                        //
+        __builtin_popcount(memory_specs.l2_cache_size) == 1 &&   //
+        __builtin_popcount(memory_specs.cache_line_size) == 1 && //
+        "L2 cache size and cache line width must be a power of two greater than 0");
 
     // We are going to mix different parts of a large buffer (cached in L2) with a small local buffer.
     alignas(64) std::uint8_t local_buffer[64];
@@ -300,43 +303,34 @@ static void pairwise_access_aligned(bm::State &state) {
 
     // We will start with a random seed position and walk through the buffer.
     std::uint32_t random_state = std::rand();
+    std::size_t const count_pages = memory_specs.l2_cache_size / memory_specs.cache_line_size;
+    std::size_t const loads_to_benchmark = count_pages / 8;
     for (auto _ : state) {
-        __sync_synchronize();
-        random_state = crc32_hash(random_state);
-        std::size_t const page_offset =
-            (random_state & (memory_specs.l2_cache_size - 1)) & ~(memory_specs.cache_line_size - 1);
-        mix_64_bytes(&local_buffer[0], l2_buffer.data() + page_offset);
-        bm::DoNotOptimize(local_buffer);
+        // The `__builtin___clear_cache(l2_buffer.data(), l2_buffer.data() + l2_buffer.size())`
+        // compiler intrinsic can't be used for the data cache, only the instructions cache.
+        for (std::size_t i = 0; i != count_pages; ++i)
+            _mm_clflush(l2_buffer.data() + i * memory_specs.cache_line_size);
+        bm::ClobberMemory();
+
+        for (std::size_t i = 0; i != loads_to_benchmark; ++i) {
+            random_state = crc32_hash(random_state);
+            std::size_t page_offset = random_state & (memory_specs.l2_cache_size - 1);
+            if constexpr (aligned)
+                page_offset &= ~(memory_specs.cache_line_size - 1);
+            mix_64_bytes(&local_buffer[0], l2_buffer.data() + page_offset);
+            bm::DoNotOptimize(local_buffer);
+        }
     }
 }
 
-static void pairwise_access_unaligned(bm::State &state) {
-    memory_specs_t const memory_specs = fetch_memory_specs();
-    assert(memory_specs.l2_cache_size > 0 && __builtin_popcount(memory_specs.l2_cache_size) == 1 &&
-           "L2 cache size must be a power of two greater than 0");
-
-    // We are going to mix different parts of a large buffer (cached in L2) with a small local buffer.
-    alignas(64) std::uint8_t local_buffer[64];
-    std::vector<std::uint8_t> l2_buffer(memory_specs.l2_cache_size + memory_specs.cache_line_size);
-    std::iota(std::begin(l2_buffer), std::end(l2_buffer), 0);
-    std::iota(std::begin(local_buffer), std::end(local_buffer), 0);
-
-    // We will start with a random seed position and walk through the buffer.
-    std::uint32_t random_state = std::rand();
-    for (auto _ : state) {
-        __sync_synchronize();
-        random_state = crc32_hash(random_state);
-        std::size_t const page_offset = (random_state & (memory_specs.l2_cache_size - 1));
-        mix_64_bytes(&local_buffer[0], l2_buffer.data() + page_offset);
-        bm::DoNotOptimize(local_buffer);
-    }
-}
+static void memory_access_unaligned(bm::State &state) { memory_access<false>(state); }
+static void memory_access_aligned(bm::State &state) { memory_access<true>(state); }
 
 // Split load occurs in the second case but not in the first.
 // While the number of access operations is the same,
 // crossing 64-byte cache-line boundaries can be significantly slower.
-BENCHMARK(pairwise_access_aligned)->MinTime(10);
-BENCHMARK(pairwise_access_unaligned)->MinTime(10);
+BENCHMARK(memory_access_aligned)->MinTime(10);
+BENCHMARK(memory_access_unaligned)->MinTime(10);
 
 // ------------------------------------
 // ## Cost of Control Flow

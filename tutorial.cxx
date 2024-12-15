@@ -1,9 +1,11 @@
 #include <algorithm> // `std::sort`
 #include <cmath>     // `std::pow`
 #include <cstdint>   // `std::int32_t`
-#include <random>    // `std::mt19937`
+#include <cstring>   // `std::memcpy`, `std::strcmp`
 #include <execution> // `std::execution::par_unseq`
+#include <fstream>   // `std::ifstream`
 #include <new>       // `std::launder`
+#include <random>    // `std::mt19937`
 #include <vector>    // `std::algorithm`
 
 #include <benchmark/benchmark.h>
@@ -194,92 +196,147 @@ BENCHMARK(u64_population_count_x86);
 // ## Data Alignment
 // ------------------------------------
 
-// Accessing data unaligned with the cache line size can impact performance.
-// Loads and stores operate at cache line granularity (typically 64 bytes),
-// not at byte granularity.
-//
-// Measuring cache latency is a challenging task with many nuanced factors at play:
-// - Prefetchers anticipating access patterns and caching lines in advance.
-// - The behavior of the TLB (Translation Lookaside Buffer) cache, which may introduce noise.
-// - Memory ordering effects influenced by hardware and compiler optimizations.
-// - Even initializing an array with zeroes for benchmarking might be problematic
-//   due to zero-page optimizations and copy-on-write.
-//
-// This setup aligns the array to the page size to minimize noise from random TLB misses.
-// Consequently, it is assumed that the array is aligned to cache line boundaries for controlled measurements.
-constexpr size_t c8_page_size = 4096;
-constexpr size_t c8_in_page = c8_page_size / sizeof(char);
-// Caches may hide the performance impact;
-// ensure buffer sizes is big enough as L2 or even L3.
-constexpr size_t c8_buffer_size = 1 << 20;
-constexpr size_t c8_pages_in_buffer = c8_buffer_size / c8_page_size;
-constexpr size_t c8_in_buffer = c8_pages_in_buffer * c8_in_page;
-constexpr size_t cache_line_size = 64;
+struct memory_specs_t {
+    std::size_t l2_cache_size = 1024 * 1024; ///< Default to 1MB
+    std::size_t cache_line_size = 64;        ///< Default to 64 bytes
+};
 
-static std::mt19937 &random_generator() {
-    static std::random_device seed_source;
-    static std::mt19937 generator(seed_source());
-    return generator;
+std::size_t parse_size_string(std::string const &str) {
+    std::size_t value = std::stoul(str);
+    if (str.find("K") != std::string::npos || str.find("k") != std::string::npos) {
+        value *= 1024;
+    } else if (str.find("M") != std::string::npos || str.find("m") != std::string::npos) {
+        value *= 1024 * 1024;
+    }
+    return value;
 }
 
-static void c8_pairwise_access_aligned(bm::State &state) {
-    char *buf = static_cast<char *>(std::aligned_alloc(c8_page_size, c8_buffer_size));
-    // This case might not apply here, but as a rule of thumb for benchmarking,
-    // avoid initializing arrays with zero to prevent runtime copy-on-write behavior for zero pages,
-    // as it may skew results.
-    std::fill(buf, buf + c8_in_buffer, 1);
-
-    // Initialize two arrays with numbers from [0-127] for paired access within the same cache line.
-    // Shuffle `el2` in two segments (0–63 and 64–126) for localized randomness.
-    size_t el1[cache_line_size * 2];
-    std::iota(std::begin(el1), std::end(el1), 0);
-    size_t el2[cache_line_size * 2];
-    std::iota(std::begin(el2), std::end(el2), 0);
-    std::shuffle(std::begin(el2), std::begin(el2) + cache_line_size, random_generator());
-    std::shuffle(std::begin(el2) + cache_line_size, std::end(el2), random_generator());
-
-    // Full memory barrier, considered to be portable.
-    __sync_synchronize();
-    for (auto _ : state)
-        for (std::size_t page = 0; page < c8_pages_in_buffer; ++page) {
-            size_t idx = page % (cache_line_size * 2);
-            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el1[idx]));
-            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el2[idx]));
-        }
-    __sync_synchronize();
-    std::free(buf);
+std::size_t read_file_contents(std::string const &path) {
+    std::ifstream file(path);
+    std::string content;
+    if (file.is_open()) {
+        std::getline(file, content);
+        file.close();
+        return parse_size_string(content);
+    }
+    return 0;
 }
 
-static void c8_pairwise_access_unaligned(bm::State &state) {
-    char *buf = static_cast<char *>(std::aligned_alloc(c8_page_size, c8_buffer_size));
-    std::fill(buf, buf + c8_in_buffer, 1);
+memory_specs_t fetch_memory_specs() {
+    memory_specs_t specs;
 
-    // Initialize two arrays with numbers from [0–127]
-    // for paired access to different cache lines.
-    size_t el1[cache_line_size * 2];
-    std::iota(std::begin(el1), std::end(el1), 0);
-    size_t el2[cache_line_size * 2];
-    std::iota(std::begin(el2), std::begin(el2) + cache_line_size, cache_line_size);
-    std::iota(std::begin(el2) + cache_line_size, std::end(el2), 0);
-    std::shuffle(std::begin(el2), std::begin(el2) + cache_line_size, random_generator());
-    std::shuffle(std::begin(el2) + cache_line_size, std::end(el2), random_generator());
+#if defined(__linux__)
+    specs.cache_line_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
+    specs.l2_cache_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index2/size");
 
-    __sync_synchronize();
-    for (auto _ : state)
-        for (std::size_t page = 0; page < c8_pages_in_buffer; ++page) {
-            size_t idx = page % (cache_line_size * 2);
-            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el1[idx]));
-            bm::DoNotOptimize(*(buf + (page * c8_in_page) + el2[idx]));
+#elif defined(__APPLE__)
+    size_t size;
+    size_t len = sizeof(size);
+    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0) {
+        specs.cache_line_size = size;
+    }
+    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0) {
+        specs.l2_cache_size = size;
+    }
+
+#elif defined(_WIN32)
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer[256];
+    DWORD len = sizeof(buffer);
+    if (GetLogicalProcessorInformation(buffer, &len)) {
+        for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i) {
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2) {
+                specs.l2_cache_size = buffer[i].Cache.Size;
+            }
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1) {
+                specs.cache_line_size = buffer[i].Cache.LineSize;
+            }
         }
-    __sync_synchronize();
-    std::free(buf);
+    }
+#endif
+
+    return specs;
+}
+
+/// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
+/// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,
+/// without pre-computing some random ordering.
+///
+/// On x86, when SSE4.2 is available, the `crc32` instruction can be used. Both `CRC R32, R/M32` and `CRC32 R32, R/M64`
+/// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
+/// Check out @b https://uops.info/table for more details.
+inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
+#if defined(__SSE4_2__)
+    return _mm_crc32_u32(x, 0xFFFFFFFF);
+#elif defined(__ARM_FEATURE_CRC32)
+    return __crc32cw(x, 0xFFFFFFFF);
+#else
+    return x * 2654435761u;
+#endif
+}
+
+inline void mix_64_bytes(std::uint8_t *first_buffer, std::uint8_t const *second_buffer) noexcept {
+    std::uint64_t *first = reinterpret_cast<std::uint64_t *>(first_buffer);
+    std::uint64_t const *second = reinterpret_cast<std::uint64_t const *>(second_buffer);
+    first[0] ^= second[0];
+    first[1] ^= second[1];
+    first[2] ^= second[2];
+    first[3] ^= second[3];
+    first[4] ^= second[4];
+    first[5] ^= second[5];
+    first[6] ^= second[6];
+    first[7] ^= second[7];
+}
+
+static void pairwise_access_aligned(bm::State &state) {
+    memory_specs_t const memory_specs = fetch_memory_specs();
+    assert(memory_specs.l2_cache_size > 0 && __builtin_popcount(memory_specs.l2_cache_size) == 1 &&
+           "L2 cache size must be a power of two greater than 0");
+
+    // We are going to mix different parts of a large buffer (cached in L2) with a small local buffer.
+    alignas(64) std::uint8_t local_buffer[64];
+    std::vector<std::uint8_t> l2_buffer(memory_specs.l2_cache_size + memory_specs.cache_line_size);
+    std::iota(std::begin(l2_buffer), std::end(l2_buffer), 0);
+    std::iota(std::begin(local_buffer), std::end(local_buffer), 0);
+
+    // We will start with a random seed position and walk through the buffer.
+    std::uint32_t random_state = std::rand();
+    for (auto _ : state) {
+        __sync_synchronize();
+        random_state = crc32_hash(random_state);
+        std::size_t const page_offset =
+            (random_state & (memory_specs.l2_cache_size - 1)) & ~(memory_specs.cache_line_size - 1);
+        mix_64_bytes(&local_buffer[0], l2_buffer.data() + page_offset);
+        bm::DoNotOptimize(local_buffer);
+    }
+}
+
+static void pairwise_access_unaligned(bm::State &state) {
+    memory_specs_t const memory_specs = fetch_memory_specs();
+    assert(memory_specs.l2_cache_size > 0 && __builtin_popcount(memory_specs.l2_cache_size) == 1 &&
+           "L2 cache size must be a power of two greater than 0");
+
+    // We are going to mix different parts of a large buffer (cached in L2) with a small local buffer.
+    alignas(64) std::uint8_t local_buffer[64];
+    std::vector<std::uint8_t> l2_buffer(memory_specs.l2_cache_size + memory_specs.cache_line_size);
+    std::iota(std::begin(l2_buffer), std::end(l2_buffer), 0);
+    std::iota(std::begin(local_buffer), std::end(local_buffer), 0);
+
+    // We will start with a random seed position and walk through the buffer.
+    std::uint32_t random_state = std::rand();
+    for (auto _ : state) {
+        __sync_synchronize();
+        random_state = crc32_hash(random_state);
+        std::size_t const page_offset = (random_state & (memory_specs.l2_cache_size - 1));
+        mix_64_bytes(&local_buffer[0], l2_buffer.data() + page_offset);
+        bm::DoNotOptimize(local_buffer);
+    }
 }
 
 // Split load occurs in the second case but not in the first.
 // While the number of access operations is the same,
 // crossing 64-byte cache-line boundaries can be significantly slower.
-BENCHMARK(c8_pairwise_access_aligned)->MinTime(10);
-BENCHMARK(c8_pairwise_access_unaligned)->MinTime(10);
+BENCHMARK(pairwise_access_aligned)->MinTime(10);
+BENCHMARK(pairwise_access_unaligned)->MinTime(10);
 
 // ------------------------------------
 // ## Cost of Control Flow
@@ -749,8 +806,30 @@ BENCHMARK_CAPTURE(super_sort, par_unseq, std::execution::par_unseq)
     ->UseRealTime();
 
 #endif
-// ------------------------------------
-// ## Practical Investigation Example
-// ------------------------------------
 
-BENCHMARK_MAIN();
+// ------------------------------------
+// ## Calling the benchmarks
+// ------------------------------------
+//
+// The default variant is to invoke the `BENCHMARK_MAIN()` macro.
+// Alternatively, we can unpack it, if we want to augment the main function
+// with more system logging logic.
+int main(int argc, char **argv) {
+
+    // Let's log the CPU specs:
+    memory_specs_t const specs = fetch_memory_specs();
+    std::printf("Cache Line Size: %zu bytes\n", specs.cache_line_size);
+    std::printf("L2 Cache Size: %zu bytes\n", specs.l2_cache_size);
+
+    // Make sure the defaults are set correctly:
+    char arg0_default[] = "benchmark";
+    char *args_default = arg0_default;
+    if (!argv)
+        argc = 1, argv = &args_default;
+    bm::Initialize(&argc, argv);
+    if (bm::ReportUnrecognizedArguments(argc, argv))
+        return 1;
+    bm::RunSpecifiedBenchmarks();
+    bm::Shutdown();
+    return 0;
+}

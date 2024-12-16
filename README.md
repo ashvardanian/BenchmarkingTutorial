@@ -1,16 +1,20 @@
-Much of modern code suffers from common pitfalls: bugs, security issues, and performance bottlenecks.
-Most things taught in universities are outdated, and most things taught in bootcamps are oversimplified.
-This repository provides practical examples of how to write efficient software in C and C++.
+Much of modern code suffers from common pitfalls: bugs, security vulnerabilities, and performance bottlenecks.
+University curricula often teach outdated concepts, while bootcamps oversimplify crucial software development principles.
+This repository provides practical examples of writing efficient C and C++ code.
 
 ![Less Slow C++](https://github.com/ashvardanian/ashvardanian/blob/master/repositories/LessSlow.cpp.jpg?raw=true)
 
-Even if a certain example looks over-engineered, it doesn't make it less relevant and impractical.
-All described pattern appears implicitly in any major program without most programmers acknowledging them.
-That's one of the reasons an average developer loves the idea of abstractions like multiple inheritance with dynamic polymorphism (like virtual functions in C++) or using dynamic memory allocations in loops.
-They rarely design benchmarks that contain 100K+ lines of code, like most programs. 
-They rarely scale to hundreds of cores, like most modern cloud instances.
-They rarely deal with specialized hardware accelerators with separate address spaces.
-But we don't want to be average, we want to be better, right?
+Even when an example seems over-engineered, it doesn’t make it less relevant or impractical.
+The patterns discussed here often appear implicitly in large-scale software, even if most developers don’t consciously recognize them.
+
+This is why some developers gravitate toward costly abstractions like multiple inheritance with dynamic polymorphism (e.g., `virtual` functions in C++) or using dynamic memory allocation inside loops.
+They rarely design benchmarks representing real-world projects with 100K+ lines of code.
+They rarely scale workloads across hundreds of cores, as required in modern cloud environments.
+They rarely interface with specialized hardware accelerators that have distinct address spaces.
+
+But we're not here to be average — we're here to be better.
+We want to know the cost of unaligned memory accesses, branch prediction, CPU cache misses and the latency of different cache levels, the frequency scaling policy levels, the cost of polymorphysm and asynchronous programming, and the trade-offs between accuracy and efficiency in numerical computations.
+Let's dig deeper into writing __less slow__, more efficient software.
 
 ## Quick Start
 
@@ -60,9 +64,17 @@ sudo perf stat taskset 0xEFFFEFFFEFFFEFFFEFFFEFFFEFFFEFFF build_release/less_slo
 
 ### How to Benchmark and Randomness
 
+```cpp
+static void i32_addition(bm::State &state) {
+    std::int32_t a = 0, b = 0, c = 0;
+    for (auto _ : state)
+        c = a + b;
+}
+```
+
 ### Parallelism and Computational Complexity
 
-### Branch Prediction and Speculation
+### Recursion and Branch Prediction
 
 ## Numerics
 

@@ -5,7 +5,9 @@
     "Maclaurin",
     "MSVC",
     "NVCC",
-    "reorderable"
+    "reorderable",
+    "SLEEF",
+    "Vardanian"
   ],
   "files.associations": {
     "execution": "cpp",

@@ -1,9 +1,11 @@
 #include <algorithm> // `std::sort`
+#include <cassert>   // `assert`
 #include <cmath>     // `std::pow`
 #include <cstdint>   // `std::int32_t`
 #include <cstring>   // `std::memcpy`, `std::strcmp`
 #include <execution> // `std::execution::par_unseq`
 #include <fstream>   // `std::ifstream`
+#include <iterator>  // `std::random_access_iterator_tag`
 #include <new>       // `std::launder`
 #include <random>    // `std::mt19937`
 #include <vector>    // `std::algorithm`
@@ -265,6 +267,7 @@ memory_specs_t fetch_memory_specs() {
 /// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
 /// Check out @b https://uops.info/table for more details.
 inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
+    return x * 2654435761u;
 #if defined(__SSE4_2__)
     return _mm_crc32_u32(x, 0xFFFFFFFF);
 #elif defined(__ARM_FEATURE_CRC32)
@@ -274,18 +277,96 @@ inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
 #endif
 }
 
-inline void mix_64_bytes(std::uint8_t *first_buffer, std::uint8_t const *second_buffer) noexcept {
-    std::uint64_t *first = reinterpret_cast<std::uint64_t *>(first_buffer);
-    std::uint64_t const *second = reinterpret_cast<std::uint64_t const *>(second_buffer);
-    first[0] ^= second[0];
-    first[1] ^= second[1];
-    first[2] ^= second[2];
-    first[3] ^= second[3];
-    first[4] ^= second[4];
-    first[5] ^= second[5];
-    first[6] ^= second[6];
-    first[7] ^= second[7];
+inline void fetch_64_bytes(std::byte *bytes) noexcept {
+    std::uint64_t *words = reinterpret_cast<std::uint64_t *>(bytes);
+    bm::DoNotOptimize(words[0] + words[7]);
+    bm::DoNotOptimize(words[1] + words[6]);
+    bm::DoNotOptimize(words[2] + words[5]);
+    bm::DoNotOptimize(words[3] + words[4]);
 }
+
+template <typename value_type_> class strided_iterator {
+  public:
+    using value_type = value_type_;
+    using pointer = value_type_ *;
+    using reference = value_type_ &;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::random_access_iterator_tag;
+
+    inline strided_iterator(std::byte *byte_ptr, std::size_t stride_bytes) noexcept
+        : byte_ptr_(byte_ptr), stride_bytes_(stride_bytes) {
+        assert(byte_ptr_ && "Pointer must not be null");
+    }
+
+    inline reference operator[](difference_type index) const noexcept {
+        return *reinterpret_cast<pointer>(byte_ptr_ + index * stride_bytes_);
+    }
+
+    inline reference operator*() const noexcept { return operator[](0); }
+    inline pointer operator->() const noexcept { return &operator*(); }
+
+    inline strided_iterator &operator++() noexcept {
+        byte_ptr_ += stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator operator++(int) noexcept {
+        strided_iterator temp = *this;
+        ++(*this);
+        return temp;
+    }
+
+    inline strided_iterator &operator--() noexcept {
+        byte_ptr_ -= stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator operator--(int) noexcept {
+        strided_iterator temp = *this;
+        --(*this);
+        return temp;
+    }
+
+    inline strided_iterator &operator+=(difference_type offset) noexcept {
+        byte_ptr_ += offset * stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator &operator-=(difference_type offset) noexcept {
+        byte_ptr_ -= offset * stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator operator+(difference_type offset) noexcept {
+        strided_iterator temp = *this;
+        return temp += offset;
+    }
+    inline strided_iterator operator-(difference_type offset) noexcept {
+        strided_iterator temp = *this;
+        return temp -= offset;
+    }
+
+    inline friend difference_type operator-(strided_iterator const &a, strided_iterator const &b) noexcept {
+        assert(a.stride_bytes_ == b.stride_bytes_);
+        return (a.byte_ptr_ - b.byte_ptr_) / static_cast<difference_type>(a.stride_bytes_);
+    }
+
+    inline friend bool operator==(strided_iterator const &a, strided_iterator const &b) noexcept {
+        return a.byte_ptr_ == b.byte_ptr_;
+    }
+    inline friend bool operator<(strided_iterator const &a, strided_iterator const &b) noexcept {
+        return a.byte_ptr_ < b.byte_ptr_;
+    }
+
+    inline friend bool operator!=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(a == b); }
+    inline friend bool operator>(strided_iterator const &a, strided_iterator const &b) noexcept { return b < a; }
+    inline friend bool operator<=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(b < a); }
+    inline friend bool operator>=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(a < b); }
+
+  private:
+    std::byte *byte_ptr_;
+    std::size_t stride_bytes_;
+};
 
 template <bool aligned> static void memory_access(bm::State &state) {
     memory_specs_t const memory_specs = fetch_memory_specs();
@@ -295,31 +376,30 @@ template <bool aligned> static void memory_access(bm::State &state) {
         __builtin_popcount(memory_specs.cache_line_size) == 1 && //
         "L2 cache size and cache line width must be a power of two greater than 0");
 
-    // We are going to mix different parts of a large buffer (cached in L2) with a small local buffer.
-    alignas(64) std::uint8_t local_buffer[64];
-    std::vector<std::uint8_t> l2_buffer(memory_specs.l2_cache_size + memory_specs.cache_line_size);
-    std::iota(std::begin(l2_buffer), std::end(l2_buffer), 0);
-    std::iota(std::begin(local_buffer), std::end(local_buffer), 0);
+    std::size_t const l2_buffer_size = memory_specs.l2_cache_size + memory_specs.cache_line_size;
+    std::unique_ptr<std::byte[]> const l2_buffer = std::make_unique<std::byte[]>(l2_buffer_size);
+    std::byte *const l2_buffer_ptr = l2_buffer.get();
+
+    std::size_t const offset_within_page = !aligned ? memory_specs.cache_line_size - sizeof(std::uint32_t) / 2 : 0;
+    strided_iterator<std::uint32_t> integers(l2_buffer_ptr + offset_within_page, memory_specs.cache_line_size);
 
     // We will start with a random seed position and walk through the buffer.
-    std::uint32_t random_state = std::rand();
+    std::uint32_t semi_random_state = std::rand();
     std::size_t const count_pages = memory_specs.l2_cache_size / memory_specs.cache_line_size;
-    std::size_t const loads_to_benchmark = count_pages / 8;
+    std::size_t const count_cycles = count_pages / 8;
     for (auto _ : state) {
-        // The `__builtin___clear_cache(l2_buffer.data(), l2_buffer.data() + l2_buffer.size())`
+        // Generate some semi-random data
+        std::generate_n(integers, count_pages,
+                        [&semi_random_state] { return semi_random_state = crc32_hash(semi_random_state); });
+
+        // Flush all of the pages out of the cache
+        // The `__builtin___clear_cache(l2_buffer_ptr, l2_buffer_ptr + l2_buffer.size())`
         // compiler intrinsic can't be used for the data cache, only the instructions cache.
         for (std::size_t i = 0; i != count_pages; ++i)
-            _mm_clflush(l2_buffer.data() + i * memory_specs.cache_line_size);
+            _mm_clflush(l2_buffer_ptr + i * memory_specs.cache_line_size);
         bm::ClobberMemory();
 
-        for (std::size_t i = 0; i != loads_to_benchmark; ++i) {
-            random_state = crc32_hash(random_state);
-            std::size_t page_offset = random_state & (memory_specs.l2_cache_size - 1);
-            if constexpr (aligned)
-                page_offset &= ~(memory_specs.cache_line_size - 1);
-            mix_64_bytes(&local_buffer[0], l2_buffer.data() + page_offset);
-            bm::DoNotOptimize(local_buffer);
-        }
+        std::sort(integers, integers + count_pages);
     }
 }
 
@@ -329,8 +409,8 @@ static void memory_access_aligned(bm::State &state) { memory_access<true>(state)
 // Split load occurs in the second case but not in the first.
 // While the number of access operations is the same,
 // crossing 64-byte cache-line boundaries can be significantly slower.
-BENCHMARK(memory_access_aligned)->MinTime(10);
 BENCHMARK(memory_access_unaligned)->MinTime(10);
+BENCHMARK(memory_access_aligned)->MinTime(10);
 
 // ------------------------------------
 // ## Cost of Control Flow

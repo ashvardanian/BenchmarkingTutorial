@@ -1,3 +1,8 @@
+/**
+ *  @brief  Low-level microbenchmarks designed for educational purposes.
+ *  @file   less_slow.cpp
+ *  @author Ash Vardanian
+ */
 #include <algorithm> // `std::sort`
 #include <cassert>   // `assert`
 #include <cmath>     // `std::pow`

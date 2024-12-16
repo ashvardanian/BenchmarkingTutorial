@@ -851,38 +851,76 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
 void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
     __m512 a_mat = _mm512_loadu_ps(&a[0][0]);
     __m512 b_mat = _mm512_loadu_ps(&b[0][0]);
-    __m512 c_mat = _mm512_setzero_ps();
 
-    // We need the following intrinsics to implement the matrix multiplication in AVX-512 efficiently:
-    //
-    // - `_mm512_permutexvar_ps` maps to `vpermps zmm, zmm, zmm`:
-    //      - On Intel Skylake-X: 3 cycle latency, port 5.
-    //      - On Intel Ice Lake: 3 cycle latency, port 5.
-    //      - On AMD Zen4: 6 cycle latency, ports: 1 and 2.
-    // - `_mm512_fmadd_ps` maps to `vfmadd231ps zmm, zmm, zmm`:
-    //      - On Intel Skylake-X: 4 cycle latency, ports: 0 and 5.
-    //      - On Intel Ice Lake: 4 cycle latency, port 0.
-    //      - On AMD Zen4: 4 cycle latency, ports: 0 and 1.
-    // - `_mm512_mul_ps` maps to `vmulps zmm, zmm, zmm`:
-    //      - On Intel Skylake-X: 4 cycle latency, ports: 0 and 5.
-    //      - On Intel Ice Lake: 4 cycle latency, port 0.
-    //      - On AMD Zen4: 3 cycle latency, ports: 0 and 1.
-    // - `_mm512_permute_ps` maps to `vpermilps zmm, zmm, imm8`:
-    //      - On Intel Skylake-X: 1 cycle latency, port 5.
-    //      - On Intel Ice Lake: 1 cycle latency, port 5.
-    //      - On AMD Zen4: 1 cycle latency, ports: 1, 2, 3.
-    //
-    __m512i b_transposition = _mm512_setr_epi32( //
-        15, 11, 7, 3,                            //
-        14, 10, 6, 2,                            //
-        13, 9, 5, 1,                             //
-        12, 8, 4, 0                              //
+    __m512i trans_perm = _mm512_setr_epi32( //
+        0, 4, 8, 12,                        //
+        1, 5, 9, 13,                        //
+        2, 6, 10, 14,                       //
+        3, 7, 11, 15                        //
     );
-    b_mat = _mm512_permutexvar_ps(b_transposition, b_mat);
+    
+    __m512i lshiftz_8_perm = _mm512_setr_epi32( //
+        8, 9, 10, 11,                           //
+        12, 13, 14, 15,                         //
+        0, 0, 0, 0,                             //
+        0, 0, 0, 0                              //
+    );
+    
+    __m512i rot_4_perm = _mm512_setr_epi32( //
+        4, 5, 6, 7,                         //
+        8, 9, 10, 11,                       //
+        12, 13, 14, 15,                     //
+        0, 1, 2, 3                          //
+    );
 
-    _mm512_storeu_ps(&c[0][0], c_mat);
+    // first C row
+    __m512 a_row_1_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
+    __m512 a_row_1_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_1_broad);
+    __m512 c_row_1 = _mm512_setzero_ps();
+    c_row_1 = _mm512_fmadd_ps(a_row_1_broad_trans, b_mat, c_row_1);
+    __m512 c_row_1_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_1);
+    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
+    c_row_1_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_1);
+    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
+    _mm512_mask_compressstoreu_ps(&c[0][0], 0xF, c_row_1);
+
+    // second C row
+    a_mat = _mm512_permutexvar_ps(rot_4_perm, a_mat);
+    __m512 a_row_2_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
+    __m512 a_row_2_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_2_broad);
+    __m512 c_row_2 = _mm512_setzero_ps();
+    c_row_2 = _mm512_fmadd_ps(a_row_2_broad_trans, b_mat, c_row_2);
+    __m512 c_row_2_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_2);
+    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
+    c_row_2_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_2);
+    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
+    _mm512_mask_compressstoreu_ps(&c[1][0], 0xF, c_row_2);
+
+    // third C row
+    a_mat = _mm512_permutexvar_ps(rot_4_perm, a_mat);
+    __m512 a_row_3_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
+    __m512 a_row_3_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_3_broad);
+    __m512 c_row_3 = _mm512_setzero_ps();
+    c_row_3 = _mm512_fmadd_ps(a_row_3_broad_trans, b_mat, c_row_3);
+    __m512 c_row_3_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_3);
+    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
+    c_row_3_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_3);
+    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
+    _mm512_mask_compressstoreu_ps(&c[2][0], 0xF, c_row_3);
+
+    // fourth C row
+    a_mat = _mm512_permutexvar_ps(rot_4_perm, a_mat);
+    __m512 a_row_4_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
+    __m512 a_row_4_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_4_broad);
+    __m512 c_row_4 = _mm512_setzero_ps();
+    c_row_4 = _mm512_fmadd_ps(a_row_4_broad_trans, b_mat, c_row_4);
+    __m512 c_row_4_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_4);
+    c_row_4 = _mm512_add_ps(c_row_4, c_row_4_rot);
+    c_row_4_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_4);
+    c_row_4 = _mm512_add_ps(c_row_4, c_row_4_rot);
+    _mm512_mask_compressstoreu_ps(&c[3][0], 0xF, c_row_4);
 }
-
+   
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC pop_options
 #elif defined(__clang__)

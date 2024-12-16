@@ -590,40 +590,47 @@ std::size_t read_file_contents(std::string const &path) {
     return 0;
 }
 
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#endif
+
 memory_specs_t fetch_memory_specs() {
     memory_specs_t specs;
 
 #if defined(__linux__)
     specs.cache_line_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
     specs.l2_cache_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index2/size");
-
-#elif defined(__APPLE__)
+#endif
+#if defined(__APPLE__)
     size_t size;
     size_t len = sizeof(size);
-    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0) {
+    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0)
         specs.cache_line_size = size;
-    }
-    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0) {
+    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0)
         specs.l2_cache_size = size;
-    }
-
-#elif defined(_WIN32)
+#endif
+#if defined(_WIN32)
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer[256];
     DWORD len = sizeof(buffer);
     if (GetLogicalProcessorInformation(buffer, &len)) {
         for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i) {
-            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2) {
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2)
                 specs.l2_cache_size = buffer[i].Cache.Size;
-            }
-            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1) {
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1)
                 specs.cache_line_size = buffer[i].Cache.LineSize;
-            }
         }
     }
 #endif
 
     return specs;
 }
+
+#if defined(__SSE4_2__)
+#include <immintrin.h> // `_mm_crc32_u32`
+#elif defined(__ARM_FEATURE_CRC32)
+#include <arm_acle.h> // `__crc32cw`
+#endif
 
 /// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
 /// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,

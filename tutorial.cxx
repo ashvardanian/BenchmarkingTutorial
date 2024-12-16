@@ -1,8 +1,11 @@
 #include <algorithm> // `std::sort`
+#include <cassert>   // `assert`
 #include <cmath>     // `std::pow`
 #include <cstdint>   // `std::int32_t`
-#include <cstdlib>   // `std::rand`
+#include <cstring>   // `std::memcpy`, `std::strcmp`
 #include <execution> // `std::execution::par_unseq`
+#include <fstream>   // `std::ifstream`
+#include <iterator>  // `std::random_access_iterator_tag`
 #include <new>       // `std::launder`
 #include <random>    // `std::mt19937`
 #include <vector>    // `std::algorithm`
@@ -195,35 +198,219 @@ BENCHMARK(u64_population_count_x86);
 // ## Data Alignment
 // ------------------------------------
 
-constexpr std::size_t f32s_in_cache_line_k = 64 / sizeof(float);
-constexpr std::size_t f32s_in_cache_line_half_k = f32s_in_cache_line_k / 2;
-
-struct alignas(64) f32_array_t {
-    float raw[f32s_in_cache_line_k * 2];
+struct memory_specs_t {
+    std::size_t l2_cache_size = 1024 * 1024; ///< Default to 1MB
+    std::size_t cache_line_size = 64;        ///< Default to 64 bytes
 };
 
-static void f32_pairwise_accumulation(bm::State &state) {
-    f32_array_t a, b, c;
-    for (auto _ : state)
-        for (std::size_t i = f32s_in_cache_line_half_k; i != f32s_in_cache_line_half_k * 3; ++i)
-            bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
+std::size_t parse_size_string(std::string const &str) {
+    std::size_t value = std::stoul(str);
+    if (str.find("K") != std::string::npos || str.find("k") != std::string::npos) {
+        value *= 1024;
+    } else if (str.find("M") != std::string::npos || str.find("m") != std::string::npos) {
+        value *= 1024 * 1024;
+    }
+    return value;
 }
 
-static void f32_pairwise_accumulation_aligned(bm::State &state) {
-    f32_array_t a, b, c;
-    for (auto _ : state)
-        for (std::size_t i = 0; i != f32s_in_cache_line_half_k * 2; ++i)
-            bm::DoNotOptimize(c.raw[i] = a.raw[i] + b.raw[i]);
+std::size_t read_file_contents(std::string const &path) {
+    std::ifstream file(path);
+    std::string content;
+    if (file.is_open()) {
+        std::getline(file, content);
+        file.close();
+        return parse_size_string(content);
+    }
+    return 0;
 }
 
-// TODO: Resolve cache prefetching issues to ensure accurate benchmark results
-// after resolving https://github.com/ashvardanian/BenchmarkingTutorial/issues/1
-// Currently, this test does not show meaningful differences due to cache prefetching.
+memory_specs_t fetch_memory_specs() {
+    memory_specs_t specs;
 
-// Split load occurs in the first case and doesn't in the second.
-// We do the same number of arithmetical operations, but:
-BENCHMARK(f32_pairwise_accumulation)->MinTime(10);
-BENCHMARK(f32_pairwise_accumulation_aligned)->MinTime(10);
+#if defined(__linux__)
+    specs.cache_line_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
+    specs.l2_cache_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index2/size");
+
+#elif defined(__APPLE__)
+    size_t size;
+    size_t len = sizeof(size);
+    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0) {
+        specs.cache_line_size = size;
+    }
+    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0) {
+        specs.l2_cache_size = size;
+    }
+
+#elif defined(_WIN32)
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer[256];
+    DWORD len = sizeof(buffer);
+    if (GetLogicalProcessorInformation(buffer, &len)) {
+        for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i) {
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2) {
+                specs.l2_cache_size = buffer[i].Cache.Size;
+            }
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1) {
+                specs.cache_line_size = buffer[i].Cache.LineSize;
+            }
+        }
+    }
+#endif
+
+    return specs;
+}
+
+/// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
+/// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,
+/// without pre-computing some random ordering.
+///
+/// On x86, when SSE4.2 is available, the `crc32` instruction can be used. Both `CRC R32, R/M32` and `CRC32 R32, R/M64`
+/// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
+/// Check out @b https://uops.info/table for more details.
+inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
+    return x * 2654435761u;
+#if defined(__SSE4_2__)
+    return _mm_crc32_u32(x, 0xFFFFFFFF);
+#elif defined(__ARM_FEATURE_CRC32)
+    return __crc32cw(x, 0xFFFFFFFF);
+#else
+    return x * 2654435761u;
+#endif
+}
+
+inline void fetch_64_bytes(std::byte *bytes) noexcept {
+    std::uint64_t *words = reinterpret_cast<std::uint64_t *>(bytes);
+    bm::DoNotOptimize(words[0] + words[7]);
+    bm::DoNotOptimize(words[1] + words[6]);
+    bm::DoNotOptimize(words[2] + words[5]);
+    bm::DoNotOptimize(words[3] + words[4]);
+}
+
+template <typename value_type_> class strided_iterator {
+  public:
+    using value_type = value_type_;
+    using pointer = value_type_ *;
+    using reference = value_type_ &;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::random_access_iterator_tag;
+
+    inline strided_iterator(std::byte *byte_ptr, std::size_t stride_bytes) noexcept
+        : byte_ptr_(byte_ptr), stride_bytes_(stride_bytes) {
+        assert(byte_ptr_ && "Pointer must not be null");
+    }
+
+    inline reference operator[](difference_type index) const noexcept {
+        return *reinterpret_cast<pointer>(byte_ptr_ + index * stride_bytes_);
+    }
+
+    inline reference operator*() const noexcept { return operator[](0); }
+    inline pointer operator->() const noexcept { return &operator*(); }
+
+    inline strided_iterator &operator++() noexcept {
+        byte_ptr_ += stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator operator++(int) noexcept {
+        strided_iterator temp = *this;
+        ++(*this);
+        return temp;
+    }
+
+    inline strided_iterator &operator--() noexcept {
+        byte_ptr_ -= stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator operator--(int) noexcept {
+        strided_iterator temp = *this;
+        --(*this);
+        return temp;
+    }
+
+    inline strided_iterator &operator+=(difference_type offset) noexcept {
+        byte_ptr_ += offset * stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator &operator-=(difference_type offset) noexcept {
+        byte_ptr_ -= offset * stride_bytes_;
+        return *this;
+    }
+
+    inline strided_iterator operator+(difference_type offset) noexcept {
+        strided_iterator temp = *this;
+        return temp += offset;
+    }
+    inline strided_iterator operator-(difference_type offset) noexcept {
+        strided_iterator temp = *this;
+        return temp -= offset;
+    }
+
+    inline friend difference_type operator-(strided_iterator const &a, strided_iterator const &b) noexcept {
+        assert(a.stride_bytes_ == b.stride_bytes_);
+        return (a.byte_ptr_ - b.byte_ptr_) / static_cast<difference_type>(a.stride_bytes_);
+    }
+
+    inline friend bool operator==(strided_iterator const &a, strided_iterator const &b) noexcept {
+        return a.byte_ptr_ == b.byte_ptr_;
+    }
+    inline friend bool operator<(strided_iterator const &a, strided_iterator const &b) noexcept {
+        return a.byte_ptr_ < b.byte_ptr_;
+    }
+
+    inline friend bool operator!=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(a == b); }
+    inline friend bool operator>(strided_iterator const &a, strided_iterator const &b) noexcept { return b < a; }
+    inline friend bool operator<=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(b < a); }
+    inline friend bool operator>=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(a < b); }
+
+  private:
+    std::byte *byte_ptr_;
+    std::size_t stride_bytes_;
+};
+
+template <bool aligned> static void memory_access(bm::State &state) {
+    memory_specs_t const memory_specs = fetch_memory_specs();
+    assert(                                                      //
+        memory_specs.l2_cache_size > 0 &&                        //
+        __builtin_popcount(memory_specs.l2_cache_size) == 1 &&   //
+        __builtin_popcount(memory_specs.cache_line_size) == 1 && //
+        "L2 cache size and cache line width must be a power of two greater than 0");
+
+    std::size_t const l2_buffer_size = memory_specs.l2_cache_size + memory_specs.cache_line_size;
+    std::unique_ptr<std::byte[]> const l2_buffer = std::make_unique<std::byte[]>(l2_buffer_size);
+    std::byte *const l2_buffer_ptr = l2_buffer.get();
+
+    std::size_t const offset_within_page = !aligned ? memory_specs.cache_line_size - sizeof(std::uint32_t) / 2 : 0;
+    strided_iterator<std::uint32_t> integers(l2_buffer_ptr + offset_within_page, memory_specs.cache_line_size);
+
+    // We will start with a random seed position and walk through the buffer.
+    std::uint32_t semi_random_state = std::rand();
+    std::size_t const count_pages = memory_specs.l2_cache_size / memory_specs.cache_line_size;
+    std::size_t const count_cycles = count_pages / 8;
+    for (auto _ : state) {
+        // Generate some semi-random data
+        std::generate_n(integers, count_pages,
+                        [&semi_random_state] { return semi_random_state = crc32_hash(semi_random_state); });
+
+        // Flush all of the pages out of the cache
+        // The `__builtin___clear_cache(l2_buffer_ptr, l2_buffer_ptr + l2_buffer.size())`
+        // compiler intrinsic can't be used for the data cache, only the instructions cache.
+        for (std::size_t i = 0; i != count_pages; ++i)
+            _mm_clflush(l2_buffer_ptr + i * memory_specs.cache_line_size);
+        bm::ClobberMemory();
+
+        std::sort(integers, integers + count_pages);
+    }
+}
+
+static void memory_access_unaligned(bm::State &state) { memory_access<false>(state); }
+static void memory_access_aligned(bm::State &state) { memory_access<true>(state); }
+
+// Split load occurs in the second case but not in the first.
+// While the number of access operations is the same,
+// crossing 64-byte cache-line boundaries can be significantly slower.
+BENCHMARK(memory_access_unaligned)->MinTime(10);
+BENCHMARK(memory_access_aligned)->MinTime(10);
 
 // ------------------------------------
 // ## Cost of Control Flow
@@ -695,7 +882,28 @@ BENCHMARK_CAPTURE(super_sort, par_unseq, std::execution::par_unseq)
 #endif
 
 // ------------------------------------
-// ## Practical Investigation Example
+// ## Calling the benchmarks
 // ------------------------------------
+//
+// The default variant is to invoke the `BENCHMARK_MAIN()` macro.
+// Alternatively, we can unpack it, if we want to augment the main function
+// with more system logging logic.
+int main(int argc, char **argv) {
 
-BENCHMARK_MAIN();
+    // Let's log the CPU specs:
+    memory_specs_t const specs = fetch_memory_specs();
+    std::printf("Cache Line Size: %zu bytes\n", specs.cache_line_size);
+    std::printf("L2 Cache Size: %zu bytes\n", specs.l2_cache_size);
+
+    // Make sure the defaults are set correctly:
+    char arg0_default[] = "benchmark";
+    char *args_default = arg0_default;
+    if (!argv)
+        argc = 1, argv = &args_default;
+    bm::Initialize(&argc, argv);
+    if (bm::ReportUnrecognizedArguments(argc, argv))
+        return 1;
+    bm::RunSpecifiedBenchmarks();
+    bm::Shutdown();
+    return 0;
+}

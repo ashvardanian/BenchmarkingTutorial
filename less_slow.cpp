@@ -932,34 +932,14 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_avx512);
 
 #pragma region Alignment of Memory Accesses
 
-struct memory_specs_t {
-    std::size_t l2_cache_size = 1024 * 1024; ///< Default to 1 MB
-    std::size_t cache_line_size = 64;        ///< Default to 64 bytes
-};
-
-/**
- *  Takes a string like "64K" and "128M" and returns the corresponding size in bytes,
- *  expanding the multiple prefixes to the actual size, like "65536" and "134217728", respectively.
- */
-std::size_t parse_size_string(std::string const &str) {
-    std::size_t value = std::stoul(str);
-    if (str.find("K") != std::string::npos || str.find("k") != std::string::npos)
-        value *= 1024;
-    else if (str.find("M") != std::string::npos || str.find("m") != std::string::npos)
-        value *= 1024 * 1024;
-    else if (str.find("G") != std::string::npos || str.find("g") != std::string::npos)
-        value *= 1024 * 1024 * 1024;
-    return value;
-}
-
-std::size_t read_file_contents(std::string const &path) {
+std::string read_file_contents(std::string const &path) {
     std::ifstream file(path);
     std::string content;
     if (!file.is_open())
         return 0;
     std::getline(file, content);
     file.close();
-    return parse_size_string(content);
+    return content;
 }
 
 /**
@@ -968,43 +948,33 @@ std::size_t read_file_contents(std::string const &path) {
  *  Intel. To avoid Assembly, one can use compiler intrinsics, but those differ between compilers and don't provide a
  *  solution for Arm. Alternatively, we use Operating System APIs - different for Linux, MacOS, and Windows.
  */
-memory_specs_t fetch_memory_specs() {
-    memory_specs_t specs;
+std::size_t fetch_cache_line_width() {
 
 #if defined(__linux__)
     // On Linux, we can read the cache line size and the L2 cache size from the "sysfs" virtual filesystem.
     // It can provide the properties of each individual CPU core.
-    specs.cache_line_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
-    specs.l2_cache_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index2/size");
+    std::string file_contents = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
+    std::size_t cache_line_size = std::stoul(file_contents);
+    return cache_line_size;
 
 #elif defined(__APPLE__)
     // On macOS, we can use the `sysctlbyname` function to read the `hw.cachelinesize` and `hw.l2cachesize` values
     // into unsigned integers. You can achieve the same by using the `sysctl -a` command-line utility.
     size_t size;
     size_t len = sizeof(size);
-    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0) {
-        specs.cache_line_size = size;
-    }
-    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0) {
-        specs.l2_cache_size = size;
-    }
+    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0)
+        return size;
 
 #elif defined(_WIN32)
     SYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer[256];
     DWORD len = sizeof(buffer);
-    if (GetLogicalProcessorInformation(buffer, &len)) {
-        for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i) {
-            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2) {
-                specs.l2_cache_size = buffer[i].Cache.Size;
-            }
-            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1) {
-                specs.cache_line_size = buffer[i].Cache.LineSize;
-            }
-        }
-    }
+    if (GetLogicalProcessorInformation(buffer, &len))
+        for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i)
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1)
+                return buffer[i].Cache.LineSize;
 #endif
 
-    return specs;
+    return 0;
 }
 
 /**
@@ -1054,36 +1024,34 @@ template <typename value_type_> class strided_ptr {
 };
 
 template <bool aligned> static void memory_access(bm::State &state) {
-    memory_specs_t const memory_specs = fetch_memory_specs();
-    assert(                                                        //
-        memory_specs.l2_cache_size > 0 &&                          //
-        __builtin_popcountll(memory_specs.l2_cache_size) == 1 &&   //
-        __builtin_popcountll(memory_specs.cache_line_size) == 1 && //
-        "L2 cache size and cache line width must be a power of two greater than 0");
+    constexpr std::size_t typical_l2_size = 1024u * 1024u;
+    std::size_t const cache_line_width = fetch_cache_line_width();
+    assert(cache_line_width > 0 && __builtin_popcountll(cache_line_width) == 1 &&
+           "The cache line width must be a power of two greater than 0");
 
     // We are using a fairly small L2-cache-sized buffer to show, that this is not just about Big Data.
     // Anything beyond a few megabytes with irregular memory accesses may suffer from the same issues.
-    // For split-loads, pad our buffer with an extra `memory_specs.cache_line_size` bytes of space.
-    std::size_t const l2_buffer_size = memory_specs.l2_cache_size + memory_specs.cache_line_size;
-    std::unique_ptr<std::byte, decltype(&std::free)> const l2_buffer(                                    //
-        reinterpret_cast<std::byte *>(std::aligned_alloc(memory_specs.cache_line_size, l2_buffer_size)), //
+    // For split-loads, pad our buffer with an extra `cache_line_width` bytes of space.
+    std::size_t const buffer_size = typical_l2_size + cache_line_width;
+    std::unique_ptr<std::byte, decltype(&std::free)> const buffer(                        //
+        reinterpret_cast<std::byte *>(std::aligned_alloc(cache_line_width, buffer_size)), //
         &std::free);
-    std::byte *const l2_buffer_ptr = l2_buffer.get();
+    std::byte *const buffer_ptr = buffer.get();
 
     // Let's initialize a strided range using out `strided_ptr` template, but for `aligned == false`
     // make sure that the scalar-of-interest in each stride is located exactly at the boundary between two cache lines.
-    std::size_t const offset_within_page = !aligned ? (memory_specs.cache_line_size - sizeof(std::uint32_t) / 2) : 0;
-    strided_ptr<std::uint32_t> integers(l2_buffer_ptr + offset_within_page, memory_specs.cache_line_size);
+    std::size_t const offset_within_page = !aligned ? (cache_line_width - sizeof(std::uint32_t) / 2) : 0;
+    strided_ptr<std::uint32_t> integers(buffer_ptr + offset_within_page, cache_line_width);
 
     // We will start with a random seed position and walk through the buffer.
     std::uint32_t semi_random_state = 0xFFFFFFFFu;
-    std::size_t const count_pages = memory_specs.l2_cache_size / memory_specs.cache_line_size;
+    std::size_t const count_pages = typical_l2_size / cache_line_width;
     for (auto _ : state) {
         // Generate some semi-random data, using Knuth's multiplicative hash number derived from the golden ratio.
         std::generate_n(integers, count_pages, [&semi_random_state] { return semi_random_state *= 2654435761u; });
 
         // Flush all of the pages out of the cache
-        // The `__builtin___clear_cache(l2_buffer_ptr, l2_buffer_ptr + l2_buffer.size())`
+        // The `__builtin___clear_cache(buffer_ptr, buffer_ptr + buffer.size())`
         // compiler intrinsic can't be used for the data cache, only the instructions cache.
         // For Arm, GCC provides a `__aarch64_sync_cache_range` intrinsic, but it's not available in Clang.
         for (std::size_t i = 0; i != count_pages; ++i)
@@ -1108,6 +1076,21 @@ BENCHMARK(memory_access_aligned)->MinTime(10);
 #pragma endregion // Alignment of Memory Accesses
 
 #pragma region Non Uniform Memory Access
+
+/**
+ *  Takes a string like "64K" and "128M" and returns the corresponding size in bytes,
+ *  expanding the multiple prefixes to the actual size, like "65536" and "134217728", respectively.
+ */
+std::size_t parse_size_string(std::string const &str) {
+    std::size_t value = std::stoul(str);
+    if (str.find("K") != std::string::npos || str.find("k") != std::string::npos)
+        value *= 1024;
+    else if (str.find("M") != std::string::npos || str.find("m") != std::string::npos)
+        value *= 1024 * 1024;
+    else if (str.find("G") != std::string::npos || str.find("g") != std::string::npos)
+        value *= 1024 * 1024 * 1024;
+    return value;
+}
 
 #pragma endregion // Non Uniform Memory Access
 
@@ -1155,9 +1138,8 @@ inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
 int main(int argc, char **argv) {
 
     // Let's log the CPU specs:
-    memory_specs_t const specs = fetch_memory_specs();
-    std::printf("Cache Line Size: %zu bytes\n", specs.cache_line_size);
-    std::printf("L2 Cache Size: %zu bytes\n", specs.l2_cache_size);
+    std::size_t const cache_line_width = fetch_cache_line_width();
+    std::printf("Cache line width: %zu bytes\n", cache_line_width);
 
     // Make sure the defaults are set correctly:
     char arg0_default[] = "benchmark";

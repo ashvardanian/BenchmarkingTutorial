@@ -859,66 +859,131 @@ void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][
         3, 7, 11, 15                        //
     );
     
-    __m512i lshiftz_8_perm = _mm512_setr_epi32( //
-        8, 9, 10, 11,                           //
-        12, 13, 14, 15,                         //
-        0, 0, 0, 0,                             //
-        0, 0, 0, 0                              //
-    );
-    
-    __m512i rot_4_perm = _mm512_setr_epi32( //
-        4, 5, 6, 7,                         //
-        8, 9, 10, 11,                       //
-        12, 13, 14, 15,                     //
-        0, 1, 2, 3                          //
-    );
-
-    // first C row
+    // Begin calculatation for the First C Row
     __m512 a_row_1_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
-    __m512 a_row_1_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_1_broad);
-    __m512 c_row_1 = _mm512_setzero_ps();
-    c_row_1 = _mm512_fmadd_ps(a_row_1_broad_trans, b_mat, c_row_1);
-    __m512 c_row_1_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_1);
-    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
-    c_row_1_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_1);
-    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
-    _mm512_mask_compressstoreu_ps(&c[0][0], 0xF, c_row_1);
+    __m512 a_row_1_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_1_broad);    
+    __m512 c_row_1 = _mm512_mul_ps(a_row_1_broad_trans, b_mat);
 
-    // second C row
-    a_mat = _mm512_permutexvar_ps(rot_4_perm, a_mat);
+    // Perform two shift-add operations to comput first C row
+    __m512 c_row_1_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_1),
+            _mm512_castps_si512(c_row_1),
+            0x4
+        )
+    );
+    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
+    c_row_1_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_1),
+            _mm512_castps_si512(c_row_1),
+            0x2
+        )
+    );
+
+    // This vector will hold the accumulated rows for the result C matrix
+    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
+
+    // Begin calculation for the Second C Row
+    a_mat = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(a_mat),
+            _mm512_castps_si512(a_mat),
+            0x2
+        )
+    );
     __m512 a_row_2_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
     __m512 a_row_2_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_2_broad);
-    __m512 c_row_2 = _mm512_setzero_ps();
-    c_row_2 = _mm512_fmadd_ps(a_row_2_broad_trans, b_mat, c_row_2);
-    __m512 c_row_2_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_2);
-    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
-    c_row_2_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_2);
-    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
-    _mm512_mask_compressstoreu_ps(&c[1][0], 0xF, c_row_2);
+    __m512 c_row_2 = _mm512_mul_ps(a_row_2_broad_trans, b_mat);
 
-    // third C row
-    a_mat = _mm512_permutexvar_ps(rot_4_perm, a_mat);
+    // Perform two shift-add operations to compute second C row
+    __m512 c_row_2_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_2),
+            _mm512_castps_si512(c_row_2),
+            0x4
+        )
+    );
+    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
+    c_row_2_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_2),
+            _mm512_castps_si512(c_row_2),
+            0x2
+        )
+    );
+    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
+
+    // Blend lanes 4 to 7 of `c_row_2` into resulting vector
+    c_row_1 = _mm512_mask_blend_ps(0xF0, c_row_1, c_row_2);
+
+    // Begin calculation for Third C Row
+    a_mat = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(a_mat),
+            _mm512_castps_si512(a_mat),
+            0x2
+        )
+    );
     __m512 a_row_3_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
     __m512 a_row_3_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_3_broad);
-    __m512 c_row_3 = _mm512_setzero_ps();
-    c_row_3 = _mm512_fmadd_ps(a_row_3_broad_trans, b_mat, c_row_3);
-    __m512 c_row_3_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_3);
-    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
-    c_row_3_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_3);
-    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
-    _mm512_mask_compressstoreu_ps(&c[2][0], 0xF, c_row_3);
+    __m512 c_row_3 = _mm512_mul_ps(a_row_3_broad_trans, b_mat);
 
-    // fourth C row
-    a_mat = _mm512_permutexvar_ps(rot_4_perm, a_mat);
+    // Perform two shift-add operations to compute third C row    
+    __m512 c_row_3_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_3),
+            _mm512_castps_si512(c_row_3),
+            0x4
+        )
+    );
+    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
+    c_row_3_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_3),
+            _mm512_castps_si512(c_row_3),
+            0x2
+        )
+    );
+    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
+
+    // Blend lanes 8 to 11 of `c_row_3` into resulting vector
+    c_row_1 = _mm512_mask_blend_ps(0xF00, c_row_1, c_row_3);
+
+    // Begin calculation for Fourth C Row
+    a_mat = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(a_mat),
+            _mm512_castps_si512(a_mat),
+            0x2
+        )
+    );
     __m512 a_row_4_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
     __m512 a_row_4_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_4_broad);
-    __m512 c_row_4 = _mm512_setzero_ps();
-    c_row_4 = _mm512_fmadd_ps(a_row_4_broad_trans, b_mat, c_row_4);
-    __m512 c_row_4_rot = _mm512_permutexvar_ps(lshiftz_8_perm, c_row_4);
+    __m512 c_row_4 = _mm512_mul_ps(a_row_4_broad_trans, b_mat);
+
+    // Perform two shift-add operations to compute fourth C row
+    __m512 c_row_4_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_4),
+            _mm512_castps_si512(c_row_4),
+            0x4
+        )
+    );
     c_row_4 = _mm512_add_ps(c_row_4, c_row_4_rot);
-    c_row_4_rot = _mm512_permutexvar_ps(rot_4_perm, c_row_4);
+    c_row_4_rot = _mm512_castsi512_ps(
+        _mm512_alignr_epi64(
+            _mm512_castps_si512(c_row_4),
+            _mm512_castps_si512(c_row_4),
+            0x2
+        )
+    );
     c_row_4 = _mm512_add_ps(c_row_4, c_row_4_rot);
-    _mm512_mask_compressstoreu_ps(&c[3][0], 0xF, c_row_4);
+
+    // Blend the last 12 to 15 lanes of `c_row_4` into resulting vector
+    c_row_1 = _mm512_mask_blend_ps(0xF000, c_row_1, c_row_4);
+    
+    _mm512_storeu_ps(&c[0][0], c_row_1);
 }
    
 #if defined(__GNUC__) && !defined(__clang__)

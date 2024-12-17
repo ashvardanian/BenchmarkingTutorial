@@ -1096,19 +1096,162 @@ std::size_t parse_size_string(std::string const &str) {
 
 #pragma endregion // - Numerics
 
-#pragma region - Abstractions
+/**
+ *  Now that we understand the costs associated with designing kernels, we should learn how to compose them
+ *  into programs without losing all of our performance gains.
+ *
+ *  Let's imagine an abstract numeric pipeline:
+ *
+ *    1. Generate a sequence of all integers in a specific range (e.g., [1, 100])
+ *    2. Filter to keep only the integer squares
+ *    3. Expand each square into its prime factors
+ *    4. Accumulate (sum) all prime factors of all resulting numbers
+ *
+ *  We will use a few different approaches to implement this pipeline:
+ *
+ *    - Simple C++ 11 codebase using `template` function arguments.
+ *    - C++ 20 coroutines with a minimalistic generator
+ */
 
-#pragma region Virtual Functions and Polymorphism
+#pragma region - Pipelines and Abstractions
 
-#pragma endregion // Virtual Functions and Polymorphism
+inline bool is_integer_square(std::uint64_t x) noexcept {
+    std::uint64_t root = static_cast<std::uint64_t>(std::sqrt(x));
+    return root * root == x;
+}
+
+#pragma region Coroutines and Asynchronous Programming
+
+template <typename callback_type_>
+static void for_range_cpp11(std::uint64_t start, std::uint64_t end, callback_type_ &&callback) {
+    for (std::uint64_t i = start; i <= end; ++i)
+        callback(i);
+}
+
+template <typename callback_type_>
+static void generate_prime_factors_cpp11(std::uint64_t input, callback_type_ &&callback) {
+    for (std::uint64_t p = 2; p * p <= input; ++p)
+        while (input % p == 0)
+            callback(p), input /= p;
+    if (input > 1)
+        callback(input);
+}
+
+static void pipeline_cpp11_callback(bm::State &state) {
+    for (auto _ : state) {
+        std::uint64_t sum = 0;
+        for_range_cpp11(3, 100, [&](std::uint64_t value) {
+            if (is_integer_square(value))
+                generate_prime_factors_cpp11(value, [&](std::uint64_t factor) { sum += factor; });
+        });
+        bm::DoNotOptimize(sum);
+    }
+}
+
+BENCHMARK(pipeline_cpp11_callback);
+
+/**
+ *  C++20 introduces coroutines in the language, but not in the library, so we need to
+ *  provide a minimal implementation of a generator.
+ */
+#include <coroutine> // `std::coroutine_handle`
+
+template <typename integer_type_> struct integer_generator {
+    struct promise_type {
+        integer_type_ value_;
+
+        std::suspend_always yield_value(integer_type_ value) noexcept {
+            value_ = value;
+            return {};
+        }
+
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_always final_suspend() noexcept { return {}; }
+        integer_generator get_return_object() noexcept {
+            return integer_generator{std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        void return_void() noexcept {}
+        void unhandled_exception() noexcept { std::terminate(); }
+    };
+
+    std::coroutine_handle<promise_type> coro;
+
+    explicit integer_generator(std::coroutine_handle<promise_type> h) noexcept : coro(h) {}
+    integer_generator(integer_generator const &) = delete;
+    integer_generator(integer_generator &&other) noexcept : coro(other.coro) { other.coro = nullptr; }
+    ~integer_generator() noexcept {
+        if (coro)
+            coro.destroy();
+    }
+
+    struct iterator {
+        std::coroutine_handle<promise_type> handle_;
+
+        inline iterator &operator++() noexcept {
+            handle_.resume();
+            return *this;
+        }
+        inline bool operator!=(iterator const &) const noexcept { return !handle_.done(); }
+        inline integer_type_ const &operator*() const noexcept { return handle_.promise().value_; }
+    };
+
+    iterator begin() noexcept {
+        coro.resume();
+        return {coro};
+    }
+    iterator end() noexcept { return {nullptr}; }
+};
+
+// Step 1: Generate integers in a range
+integer_generator<std::uint64_t> for_range(std::uint64_t start, std::uint64_t end) noexcept {
+    for (std::uint64_t i = start; i <= end; ++i)
+        co_yield i;
+}
+
+// Step 2: Filter integer squares
+integer_generator<std::uint64_t> filter_integer_squares(integer_generator<std::uint64_t> input) noexcept {
+    for (auto v : input)
+        if (is_integer_square(v))
+            co_yield v;
+}
+
+// Step 3: Generate prime factors
+integer_generator<std::uint64_t> generate_prime_factors(std::uint64_t input) noexcept {
+    for (std::uint64_t p = 2; p * p <= input; ++p) {
+        while (input % p == 0) {
+            co_yield p;
+            input /= p;
+        }
+    }
+    if (input > 1)
+        co_yield input;
+}
+
+static void pipeline_cpp20_coroutines(bm::State &state) {
+    for (auto _ : state) {
+        std::uint64_t sum = 0;
+        for (auto value : filter_integer_squares(for_range(3, 100)))
+            for (auto factor : generate_prime_factors(value))
+                sum += factor;
+        bm::DoNotOptimize(sum);
+    }
+}
+
+BENCHMARK(pipeline_cpp20_coroutines);
+
+/**
+ *  The C++20 coroutines variant executes in @b 473ns, while the native C++11 variant takes @b 236ns.
+ */
+
+#pragma endregion // Coroutines and Asynchronous Programming
 
 #pragma region Ranges and Iterators
 
 #pragma endregion // Ranges and Iterators
 
-#pragma region Coroutines and Asynchronous Programming
+#pragma region Virtual Functions and Polymorphism
 
-#pragma endregion // Coroutines and Asynchronous Programming
+#pragma endregion // Virtual Functions and Polymorphism
 
 #pragma endregion // - Abstractions
 

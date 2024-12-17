@@ -2,7 +2,7 @@ Much of modern code suffers from common pitfalls: bugs, security vulnerabilities
 University curricula often teach outdated concepts, while bootcamps oversimplify crucial software development principles.
 This repository provides practical examples of writing efficient C and C++ code.
 
-![Less Slow C++](https://github.com/ashvardanian/ashvardanian/blob/master/repositories/LessSlow.cpp.jpg?raw=true)
+![Less Slow C++](https://github.com/ashvardanian/ashvardanian/blob/master/repositories/less_slow.cpp.jpg?raw=true)
 
 Even when an example seems over-engineered, it doesn’t make it less relevant or impractical.
 The patterns discussed here often appear implicitly in large-scale software, even if most developers don’t consciously recognize them.
@@ -82,11 +82,15 @@ static void i32_addition(bm::State &state) {
 
 [![Meme IEEE 754 vs GCC](assets/meme-ieee764-vs-gnu-compiler-cover.png)](https://ashvardanian.com/posts/google-benchmark/)
 
+### Expensive Integer Operations
+
+### CPU Ports
+
 ### Compute vs Memory Bounds with Matrix Multiplications
 
 ### Alignment of Memory Accesses
 
-
+### Non Uniform Memory Access
 
 ## Abstractions
 

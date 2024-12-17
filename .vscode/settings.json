@@ -5,6 +5,7 @@
     "Maclaurin",
     "MSVC",
     "NVCC",
+    "popcountll",
     "reorderable",
     "SLEEF",
     "Vardanian"
@@ -62,6 +63,12 @@
     "streambuf": "cpp",
     "typeinfo": "cpp",
     "variant": "cpp",
-    "text_encoding": "cpp"
+    "text_encoding": "cpp",
+    "cstring": "cpp",
+    "map": "cpp",
+    "unordered_set": "cpp",
+    "numeric": "cpp",
+    "fstream": "cpp",
+    "thread": "cpp"
   }
 }

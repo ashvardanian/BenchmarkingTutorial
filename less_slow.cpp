@@ -1065,8 +1065,9 @@ template <bool aligned> static void memory_access(bm::State &state) {
     // Anything beyond a few megabytes with irregular memory accesses may suffer from the same issues.
     // For split-loads, pad our buffer with an extra `memory_specs.cache_line_size` bytes of space.
     std::size_t const l2_buffer_size = memory_specs.l2_cache_size + memory_specs.cache_line_size;
-    std::unique_ptr<std::byte> l2_buffer;
-    l2_buffer.reset(reinterpret_cast<std::byte *>(std::aligned_alloc(memory_specs.cache_line_size, l2_buffer_size)));
+    std::unique_ptr<std::byte, decltype(&std::free)> const l2_buffer(                                    //
+        reinterpret_cast<std::byte *>(std::aligned_alloc(memory_specs.cache_line_size, l2_buffer_size)), //
+        &std::free);
     std::byte *const l2_buffer_ptr = l2_buffer.get();
 
     // Let's initialize a strided range using out `strided_ptr` template, but for `aligned == false`

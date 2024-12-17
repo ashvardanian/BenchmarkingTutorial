@@ -265,7 +265,7 @@ memory_specs_t fetch_memory_specs() {
 ///
 /// On x86, when SSE4.2 is available, the `crc32` instruction can be used. Both `CRC R32, R/M32` and `CRC32 R32, R/M64`
 /// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
-/// Check out @b https://uops.info/table for more details.
+/// Check out @b https://uops.info/table.html for more details.
 inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
     return x * 2654435761u;
 #if defined(__SSE4_2__)

@@ -11,6 +11,7 @@
 #include <execution> // `std::execution::par_unseq`
 #include <fstream>   // `std::ifstream`
 #include <iterator>  // `std::random_access_iterator_tag`
+#include <memory>    // `std::assume_aligned`
 #include <new>       // `std::launder`
 #include <random>    // `std::mt19937`
 #include <vector>    // `std::algorithm`
@@ -74,10 +75,6 @@ BENCHMARK(i32_addition_random);
  *  The answer is - no, it's not. The addition itself takes a single CPU cycle, and it's very fast.
  *  Chances are we just benchmarked something else... the `std::rand()` function.
  *
- *? Fun fact: there are only a couple of integer operations that can take ~100 cycles on select AMD CPUs,
- *? like the BMI2 bit-manipulation instructions, like @b `pdep` and @b `pext`, on AMD Zen 1 and Zen 2 chips.
- *? https://www.chessprogramming.org/BMI2
- *
  *  What if we could ask Google Benchmark to simply ignore the time spent in the `std::rand()` function?
  *  There are `PauseTiming` and `ResumeTiming` functions just for that!
  */
@@ -101,19 +98,24 @@ BENCHMARK(i32_addition_paused);
  *
  *  A typical pattern when implementing a benchmark is to initialize with a random value, and then
  *  define a very cheap update policy that won't affect the latency much but will update the inputs.
- *  Increments, bit shifts, and bit rotations are a common choice!
+ *  Increments, bit shifts, and bit rotations are a common choice! It's also a good idea to use
+ *  native @b CRC32 and @b AES instructions to produce random state, as its often done in StringZilla.
+ *  Another common approach is to use integer multiplication, often derived from the Golden Ratio,
+ *  as in Knuth multiplicative hash function (with `2654435761`).
+ *
+ *  @see StringZilla: https://github.com/ashvardanian/stringzilla
  */
 
-static void i32_addition_semi_random(bm::State &state) {
+static void i32_addition_randomly_initialized(bm::State &state) {
     std::int32_t a = std::rand(), b = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) + (++b));
 }
 
-BENCHMARK(i32_addition_semi_random);
+BENCHMARK(i32_addition_randomly_initialized);
 
 /**
- *  On x86 the `i32_addition_semi_random` performs two @b `inc` instructions and an @b `add` instruction.
+ *  On x86 the `i32_addition_randomly_initialized` performs two @b `inc` instructions and an @b `add` instruction.
  *  This should take less than @b 0.7ns on a modern CPU. The first cycle was spent incrementing `a' and `b`
  *  on different Arithmetic Logic Units (ALUs) of the same core, while the second performed the
  *  final accumulation. So at least @b 97% of the benchmark was just spent in the `std::rand()` function...
@@ -127,7 +129,7 @@ BENCHMARK(i32_addition_semi_random);
  */
 
 BENCHMARK(i32_addition_random)->Threads(8);
-BENCHMARK(i32_addition_semi_random)->Threads(8);
+BENCHMARK(i32_addition_randomly_initialized)->Threads(8);
 
 /**
  *  The `std::rand` variant latency jumped from @b 100ns in single-threaded mode to @b 12'000ns in multi-threaded,
@@ -278,7 +280,14 @@ BENCHMARK_CAPTURE(sorting_with_executors, par_unseq, std::execution::par_unseq)
  *  how the computer works. Naively implementing the Quick-Sort in C/C++ would still put us at disadvantage, compared
  *  to the STL.
  *
- *  Most implementations we can find in textbooks
+ *  Most implementations we can find in textbooks, use recursion. Recursion is a beautiful concept, but it's not
+ *  always the best choice for performance. Every nested call requires a new stack frame, and the stack is limited.
+ *  Moreover, local variables need to be constructed and destructed, and the CPU needs to jump around in memory.
+ *
+ *  The alternative, as it often is in computing, is to use compensate runtime issue with memory. We can use a stack
+ *  data structure to continuously store the state of the algorithm, and then process it in a loop.
+ *
+ *  The same ideas common appear when dealing with trees or graph algorithms.
  */
 
 #pragma region Recursion
@@ -337,7 +346,7 @@ struct quick_sort_iterative_gt {
     inline void operator()(element_t *arr, std::size_t low, std::size_t high) noexcept(false) {
 
         stack.resize((high - low + 1) * 2);
-        std::size_t top = -1;
+        std::ptrdiff_t top = -1;
 
         stack[++top] = low;
         stack[++top] = high;
@@ -386,6 +395,36 @@ BENCHMARK_TEMPLATE(cost_of_recursion, quick_sort_iterative_gt<std::int32_t>, 102
 #pragma endregion // Recursion
 
 #pragma region Branch Prediction
+
+/**
+ *  The `if` statement and seemingly innocent ternary operator (condition ? a : b)
+ *  can have a high cost for performance. It's especially noticeable, when conditional
+ *  execution is happening at the scale of single bytes, like in text processing,
+ *  parsing, search, compression, encoding, and so on.
+ *
+ *  The CPU has a branch-predictor which is one of the most complex parts of the silicon.
+ *  It memorizes the most common `if` statements, to allow "speculative execution".
+ *  In other words, start processing the task (i + 1), before finishing the task (i).
+ *
+ *  Those branch predictors are very powerful, and if you have a single `if` statement
+ *  on your hot-path, it's not a big deal. But most programs are almost entirely built
+ *  on `if` statements. On most modern CPUs up to 4096 branches will be memorized, but
+ *  anything that goes beyond that, would work slower - 3.7 ns vs 0.7 ns for the following
+ *  snippet.
+ */
+static void cost_of_branching_for_different_depth(bm::State &state) {
+    auto count = static_cast<std::size_t>(state.range(0));
+    std::vector<std::int32_t> random_values(count);
+    std::generate_n(random_values.begin(), random_values.size(), &std::rand);
+    std::int32_t variable = 0;
+    std::size_t iteration = 0;
+    for (auto _ : state) {
+        std::int32_t random = random_values[(++iteration) & (count - 1)];
+        bm::DoNotOptimize(variable = (random & 1) ? (variable + random) : (variable * random));
+    }
+}
+
+BENCHMARK(cost_of_branching_for_different_depth)->RangeMultiplier(4)->Range(256, 32 * 1024);
 
 #pragma endregion // Branch Prediction
 
@@ -484,301 +523,137 @@ FAST_MATH static void f64_sin_maclaurin_with_fast_math(bm::State &state) {
 BENCHMARK(f64_sin_maclaurin_with_fast_math);
 
 /**
+ *  It's also possible to achieve even higher performance without sacrificing accuracy by using more advanced
+ *  procedures, or by reducing the input range. For details check out SimSIMD and SLEEF libraries for different
+ *  implementations.
  *
- *? It's also possible to achieve even higher performance without sacrificing accuracy by using more advanced
- *procedures, ? or by reducing the input range. For details check out SimSIMD and SLEEF libraries for different
- *implementations.
- *
- *  @see SimSIMD repository:
- *  @see SLEEF repository:
- *
+ *  @see SimSIMD repository: https://github.com/ashvardanian/simsimd
+ *  @see SLEEF repository: https://github.com/shibatch/sleef
  */
 
 #pragma endregion // Accuracy vs Efficiency of Standard Libraries
 
 #pragma region Expensive Integer Operations
 
-// ------------------------------------
-// ## Lets look at Integer Division
-// ### If floating point arithmetic can be fast, what about integer division?
-// ------------------------------------
+/**
+ *  It may be no wonder that complex floating-point operations are expensive, but so can be
+ *  a single-instruction integer operations, most famously the @b division and the modulo.
+ */
 
-static void i64_division(bm::State &state) {
-    std::int64_t a = std::rand(), b = std::rand(), c = 0;
+static void integral_division(bm::State &state) {
+    std::int64_t a = std::rand() * std::rand(), b = std::rand() * std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) / (++b));
 }
 
-// If we take 32-bit integers - their division can be performed via `double`
-// without loss of accuracy. Result: 7ns, or 15x more expensive then addition.
-BENCHMARK(i64_division);
+BENCHMARK(integral_division);
 
-static void i64_division_by_const(bm::State &state) {
-    std::int64_t b = 2147483647;
-    std::int64_t a = std::rand(), c = 0;
-    for (auto _ : state)
-        bm::DoNotOptimize(c = (++a) / *std::launder(&b));
-}
+/**
+ *  The above operation takes about ~10 CPU cycles or @b 2.5ns.
+ *
+ *  When the denominator is known at the compile-time, however, the compiler can replace the integer
+ *  division with a combination of shifts and multiplications, which is much faster. That can be the
+ *  case even with @b prime numbers like the 2147483647.
+ *
+ *  https://www.sciencedirect.com/science/article/pii/S2405844021015450
+ */
 
-// Let's fix a constant, but `std::launder` it a bit.
-// So it looks like a generic pointer and not explicitly
-// a constant as a developer might have seen.
-// Result: more or less the same as before.
-BENCHMARK(i64_division_by_const);
-
-static void i64_division_by_constexpr(bm::State &state) {
+static void integral_division_by_constexpr(bm::State &state) {
     constexpr std::int64_t b = 2147483647;
     std::int64_t a = std::rand(), c = 0;
     for (auto _ : state)
         bm::DoNotOptimize(c = (++a) / b);
 }
 
-// But once we mark it as a `constexpr`, the compiler will replace
-// heavy divisions with a combination of simpler shifts and multiplications.
-// https://www.sciencedirect.com/science/article/pii/S2405844021015450
-BENCHMARK(i64_division_by_constexpr);
+BENCHMARK(integral_division_by_constexpr);
 
-// ------------------------------------
-// ## Where else those tricks are needed
-// ------------------------------------
+/**
+ *  The @b `constexpr` specifier isn't necessarily needed if the compiler can deduce the same property.
+ *  This can affect the benchmarks, but if you want to make sure the true division is used - you can
+ *  wrap the variable with `std::launder`
+ */
+
+static void integral_division_by_const(bm::State &state) {
+    std::int64_t b = 2147483647;
+    std::int64_t a = std::rand() * std::rand(), c = 0;
+    for (auto _ : state)
+        bm::DoNotOptimize(c = (++a) / *std::launder(&b));
+}
+
+BENCHMARK(integral_division_by_const);
+
+/**
+ *  Another important trick to know is that the 32-bit integer division can be expressed accurately
+ *  through 64-bit double-precision floating-point division. The latency should go down from 2.5ns
+ *  to @b 0.5ns.
+ */
+static void integral_division_with_doubles(bm::State &state) {
+    std::int32_t a = std::rand(), b = std::rand(), c = 0;
+    for (auto _ : state)
+        bm::DoNotOptimize(c = static_cast<std::int32_t>(static_cast<double>(++a) / static_cast<double>(++b)));
+}
+
+BENCHMARK(integral_division_with_doubles);
+
+/**
+ *  It's also crucial to understand that the performance of your code will vary depending on the compilation
+ *  settings. The @b `-O3` flag is not enough. Even if you use compiler intrinsics, like the @b `__builtin_popcountll`,
+ *  depending on the target CPU generation, it may not have a native Assembly instruction to perform the operation
+ *  and will be emulated in software.
+ *
+ *  We can use GCC attributes to specify the target CPU architecture at a function level. Everything else inside
+ *  those functions looks identical, only the flags differ.
+ */
+
 #if defined(__GNUC__) && !defined(__clang__)
 
-[[gnu::target("default")]] static void u64_population_count(bm::State &state) {
-    auto a = static_cast<uint64_t>(std::rand());
-    for (auto _ : state)
-        bm::DoNotOptimize(__builtin_popcount(++a));
+[[gnu::target("arch=core2")]]
+int bits_popcount_emulated(std::uint64_t x) {
+    return __builtin_popcountll(x);
 }
 
-BENCHMARK(u64_population_count);
-
-[[gnu::target("popcnt")]] static void u64_population_count_x86(bm::State &state) {
-    auto a = static_cast<uint64_t>(std::rand());
-    for (auto _ : state)
-        bm::DoNotOptimize(__builtin_popcount(++a));
+[[gnu::target("arch=corei7")]]
+int bits_popcount_native(std::uint64_t x) {
+    return __builtin_popcountll(x);
 }
 
-BENCHMARK(u64_population_count_x86);
+static void bits_population_count_core_2(bm::State &state) {
+    auto a = static_cast<std::uint64_t>(std::rand());
+    for (auto _ : state)
+        bm::DoNotOptimize(bits_popcount_emulated(++a));
+}
+
+BENCHMARK(bits_population_count_core_2);
+
+static void bits_population_count_core_i7(bm::State &state) {
+    auto a = static_cast<std::uint64_t>(std::rand());
+    for (auto _ : state)
+        bm::DoNotOptimize(bits_popcount_native(++a));
+}
+
+BENCHMARK(bits_population_count_core_i7);
 #endif
+
+/**
+ *  The difference is @b 3x:
+ *  - Core 2 variant: 2.4ns
+ *  - Core i7 variant: 0.8ns
+ *
+ *  Fun fact: there are only a couple of integer operations that can take @b ~100 cycles on select AMD CPUs,
+ *  like the BMI2 bit-manipulation instructions, like @b `pdep` and @b `pext`, on AMD Zen 1 and Zen 2 chips.
+ *  https://www.chessprogramming.org/BMI2
+ */
 
 #pragma endregion // Expensive Integer Operations
 
-#pragma region Alignment of Memory Accesses
-
-struct memory_specs_t {
-    std::size_t l2_cache_size = 1024 * 1024; ///< Default to 1MB
-    std::size_t cache_line_size = 64;        ///< Default to 64 bytes
-};
-
-std::size_t parse_size_string(std::string const &str) {
-    std::size_t value = std::stoul(str);
-    if (str.find("K") != std::string::npos || str.find("k") != std::string::npos) {
-        value *= 1024;
-    } else if (str.find("M") != std::string::npos || str.find("m") != std::string::npos) {
-        value *= 1024 * 1024;
-    }
-    return value;
-}
-
-std::size_t read_file_contents(std::string const &path) {
-    std::ifstream file(path);
-    std::string content;
-    if (file.is_open()) {
-        std::getline(file, content);
-        file.close();
-        return parse_size_string(content);
-    }
-    return 0;
-}
-
-memory_specs_t fetch_memory_specs() {
-    memory_specs_t specs;
-
-#if defined(__linux__)
-    specs.cache_line_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
-    specs.l2_cache_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index2/size");
-
-#elif defined(__APPLE__)
-    size_t size;
-    size_t len = sizeof(size);
-    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0) {
-        specs.cache_line_size = size;
-    }
-    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0) {
-        specs.l2_cache_size = size;
-    }
-
-#elif defined(_WIN32)
-    SYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer[256];
-    DWORD len = sizeof(buffer);
-    if (GetLogicalProcessorInformation(buffer, &len)) {
-        for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i) {
-            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2) {
-                specs.l2_cache_size = buffer[i].Cache.Size;
-            }
-            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1) {
-                specs.cache_line_size = buffer[i].Cache.LineSize;
-            }
-        }
-    }
-#endif
-
-    return specs;
-}
-
-/// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
-/// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,
-/// without pre-computing some random ordering.
-///
-/// On x86, when SSE4.2 is available, the `crc32` instruction can be used. Both `CRC R32, R/M32` and `CRC32 R32, R/M64`
-/// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
-/// Check out @b https://uops.info/table for more details.
-inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
-    return x * 2654435761u;
-#if defined(__SSE4_2__)
-    return _mm_crc32_u32(x, 0xFFFFFFFF);
-#elif defined(__ARM_FEATURE_CRC32)
-    return __crc32cw(x, 0xFFFFFFFF);
-#else
-    return x * 2654435761u;
-#endif
-}
-
-inline void fetch_64_bytes(std::byte *bytes) noexcept {
-    std::uint64_t *words = reinterpret_cast<std::uint64_t *>(bytes);
-    bm::DoNotOptimize(words[0] + words[7]);
-    bm::DoNotOptimize(words[1] + words[6]);
-    bm::DoNotOptimize(words[2] + words[5]);
-    bm::DoNotOptimize(words[3] + words[4]);
-}
-
-template <typename value_type_> class strided_iterator {
-  public:
-    using value_type = value_type_;
-    using pointer = value_type_ *;
-    using reference = value_type_ &;
-    using difference_type = std::ptrdiff_t;
-    using iterator_category = std::random_access_iterator_tag;
-
-    inline strided_iterator(std::byte *byte_ptr, std::size_t stride_bytes) noexcept
-        : byte_ptr_(byte_ptr), stride_bytes_(stride_bytes) {
-        assert(byte_ptr_ && "Pointer must not be null");
-    }
-
-    inline reference operator[](difference_type index) const noexcept {
-        return *reinterpret_cast<pointer>(byte_ptr_ + index * stride_bytes_);
-    }
-
-    inline reference operator*() const noexcept { return operator[](0); }
-    inline pointer operator->() const noexcept { return &operator*(); }
-
-    inline strided_iterator &operator++() noexcept {
-        byte_ptr_ += stride_bytes_;
-        return *this;
-    }
-
-    inline strided_iterator operator++(int) noexcept {
-        strided_iterator temp = *this;
-        ++(*this);
-        return temp;
-    }
-
-    inline strided_iterator &operator--() noexcept {
-        byte_ptr_ -= stride_bytes_;
-        return *this;
-    }
-
-    inline strided_iterator operator--(int) noexcept {
-        strided_iterator temp = *this;
-        --(*this);
-        return temp;
-    }
-
-    inline strided_iterator &operator+=(difference_type offset) noexcept {
-        byte_ptr_ += offset * stride_bytes_;
-        return *this;
-    }
-
-    inline strided_iterator &operator-=(difference_type offset) noexcept {
-        byte_ptr_ -= offset * stride_bytes_;
-        return *this;
-    }
-
-    inline strided_iterator operator+(difference_type offset) noexcept {
-        strided_iterator temp = *this;
-        return temp += offset;
-    }
-    inline strided_iterator operator-(difference_type offset) noexcept {
-        strided_iterator temp = *this;
-        return temp -= offset;
-    }
-
-    inline friend difference_type operator-(strided_iterator const &a, strided_iterator const &b) noexcept {
-        assert(a.stride_bytes_ == b.stride_bytes_);
-        return (a.byte_ptr_ - b.byte_ptr_) / static_cast<difference_type>(a.stride_bytes_);
-    }
-
-    inline friend bool operator==(strided_iterator const &a, strided_iterator const &b) noexcept {
-        return a.byte_ptr_ == b.byte_ptr_;
-    }
-    inline friend bool operator<(strided_iterator const &a, strided_iterator const &b) noexcept {
-        return a.byte_ptr_ < b.byte_ptr_;
-    }
-
-    inline friend bool operator!=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(a == b); }
-    inline friend bool operator>(strided_iterator const &a, strided_iterator const &b) noexcept { return b < a; }
-    inline friend bool operator<=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(b < a); }
-    inline friend bool operator>=(strided_iterator const &a, strided_iterator const &b) noexcept { return !(a < b); }
-
-  private:
-    std::byte *byte_ptr_;
-    std::size_t stride_bytes_;
-};
-
-template <bool aligned> static void memory_access(bm::State &state) {
-    memory_specs_t const memory_specs = fetch_memory_specs();
-    assert(                                                      //
-        memory_specs.l2_cache_size > 0 &&                        //
-        __builtin_popcount(memory_specs.l2_cache_size) == 1 &&   //
-        __builtin_popcount(memory_specs.cache_line_size) == 1 && //
-        "L2 cache size and cache line width must be a power of two greater than 0");
-
-    std::size_t const l2_buffer_size = memory_specs.l2_cache_size + memory_specs.cache_line_size;
-    std::unique_ptr<std::byte[]> const l2_buffer = std::make_unique<std::byte[]>(l2_buffer_size);
-    std::byte *const l2_buffer_ptr = l2_buffer.get();
-
-    std::size_t const offset_within_page = !aligned ? memory_specs.cache_line_size - sizeof(std::uint32_t) / 2 : 0;
-    strided_iterator<std::uint32_t> integers(l2_buffer_ptr + offset_within_page, memory_specs.cache_line_size);
-
-    // We will start with a random seed position and walk through the buffer.
-    std::uint32_t semi_random_state = std::rand();
-    std::size_t const count_pages = memory_specs.l2_cache_size / memory_specs.cache_line_size;
-    std::size_t const count_cycles = count_pages / 8;
-    for (auto _ : state) {
-        // Generate some semi-random data
-        std::generate_n(integers, count_pages,
-                        [&semi_random_state] { return semi_random_state = crc32_hash(semi_random_state); });
-
-        // Flush all of the pages out of the cache
-        // The `__builtin___clear_cache(l2_buffer_ptr, l2_buffer_ptr + l2_buffer.size())`
-        // compiler intrinsic can't be used for the data cache, only the instructions cache.
-        for (std::size_t i = 0; i != count_pages; ++i)
-            _mm_clflush(l2_buffer_ptr + i * memory_specs.cache_line_size);
-        bm::ClobberMemory();
-
-        std::sort(integers, integers + count_pages);
-    }
-}
-
-static void memory_access_unaligned(bm::State &state) { memory_access<false>(state); }
-static void memory_access_aligned(bm::State &state) { memory_access<true>(state); }
-
-// Split load occurs in the second case but not in the first.
-// While the number of access operations is the same,
-// crossing 64-byte cache-line boundaries can be significantly slower.
-BENCHMARK(memory_access_unaligned)->MinTime(10);
-BENCHMARK(memory_access_aligned)->MinTime(10);
-
-#pragma endregion // Alignment of Memory Accesses
+/**
+ *  Matrix Multiplications are the foundation of Linear Algebra, and are used in a wide range of applications,
+ *  including Artificial Intelligence, Computer Graphics, and Physics simulations. Those are so important, that
+ *  many CPUs have native instructions for multiplying small matrices, like 4x4 or 8x8. And the larger matrix
+ *  multiplications are decomposed into smaller ones, to take advantage of those instructions.
+ *
+ *  Let's emulate them and learn something new.
+ */
 
 #pragma region Compute vs Memory Bounds with Matrix Multiplications
 
@@ -804,6 +679,21 @@ static void f32_matrix_multiplication_4x4_loop(bm::State &state) {
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
+
+BENCHMARK(f32_matrix_multiplication_4x4_loop);
+
+/**
+ *  A multiplication of two NxN inputs takes up to NxNxN multiplications and NxNx(N-1) additions.
+ *  The asymptote of those operations is O(N^3), and the number of operations grows cubically with
+ *  the side of the matrix. The naive kernel above performs those operations in @b 31.5ns.
+ *
+ *  Most of those operations are data-parallel, so we can probably squeeze more performance.
+ *
+ *  The most basic trick is loop unrolling. Every @b `for` loop is in reality a @b `goto` and an @b `if`.
+ *  As we've learned from the "recursion" and "branching" sections, the jumps and conditions are expensive.
+ *  In our case, we explicitly know the the size of the matrix and the number of iterations in every one
+ *  of the @b three nested `for` loops. Let's manually express all the operations.
+ */
 
 void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4][4], float c[4][4]) {
     c[0][0] = a[0][0] * b[0][0] + a[0][1] * b[1][0] + a[0][2] * b[2][0] + a[0][3] * b[3][0];
@@ -840,6 +730,19 @@ static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
+BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
+
+/**
+ *  The unrolled variant executes in @b 11ns, or a @b 3x speedup.
+ *
+ *  Modern CPUs have a super-scalar execution capability, also called SIMD-computing (Single Instruction, Multiple
+ *  Data). It operates on words of 128, 256, or 512 bits, which can contain many 64-, 32-, 16-, or 8-bit components,
+ *  like continuous chunks of floats or integers.
+ *
+ *  Instead of individual scalar operations in the unrolled kernel, let's port to @b SSE4.1 SIMD instructions,
+ *  one of the earliest SIMD instruction sets available on most x86 CPUs.
+ */
+
 #if defined(__SSE2__)
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC push_options
@@ -849,6 +752,7 @@ static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
 #endif
 
 void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+    // Load a continuous vector of 4x floats in a single instruction., invoked by the `_mm_loadu_ps` intrinsic.
     __m128 a_row_0 = _mm_loadu_ps(&a[0][0]);
     __m128 a_row_1 = _mm_loadu_ps(&a[1][0]);
     __m128 a_row_2 = _mm_loadu_ps(&a[2][0]);
@@ -863,41 +767,29 @@ void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4
     _MM_TRANSPOSE4_PS(b_col_0, b_col_1, b_col_2, b_col_3);
 
     // Multiply A rows by B columns and store the result in C.
-    // Use OR to aggregate dot products and store results
-    __m128 c_row_0 = _mm_or_ps(                //
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_0, b_col_0, 0xF1), //
-            _mm_dp_ps(a_row_0, b_col_1, 0xF2)),
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_0, b_col_2, 0xF4), //
-            _mm_dp_ps(a_row_0, b_col_3, 0xF8)));
+    // Use bitwise "OR" to aggregate dot products and store results.
+    //
+    // The individual dot products are calculated with the `_mm_dp_ps` intrinsic, which is a dot product
+    // of two vectors, with the result stored in a single float. The last argument is a mask, which
+    // specifies which components of the vectors should be multiplied and added.
+    __m128 c_row_0 = _mm_or_ps( //
+        _mm_or_ps(_mm_dp_ps(a_row_0, b_col_0, 0xF1), _mm_dp_ps(a_row_0, b_col_1, 0xF2)),
+        _mm_or_ps(_mm_dp_ps(a_row_0, b_col_2, 0xF4), _mm_dp_ps(a_row_0, b_col_3, 0xF8)));
     _mm_storeu_ps(&c[0][0], c_row_0);
 
-    __m128 c_row_1 = _mm_or_ps(                //
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_1, b_col_0, 0xF1), //
-            _mm_dp_ps(a_row_1, b_col_1, 0xF2)),
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_1, b_col_2, 0xF4), //
-            _mm_dp_ps(a_row_1, b_col_3, 0xF8)));
+    __m128 c_row_1 = _mm_or_ps( //
+        _mm_or_ps(_mm_dp_ps(a_row_1, b_col_0, 0xF1), _mm_dp_ps(a_row_1, b_col_1, 0xF2)),
+        _mm_or_ps(_mm_dp_ps(a_row_1, b_col_2, 0xF4), _mm_dp_ps(a_row_1, b_col_3, 0xF8)));
     _mm_storeu_ps(&c[1][0], c_row_1);
 
-    __m128 c_row_2 = _mm_or_ps(                //
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_2, b_col_0, 0xF1), //
-            _mm_dp_ps(a_row_2, b_col_1, 0xF2)),
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_2, b_col_2, 0xF4), //
-            _mm_dp_ps(a_row_2, b_col_3, 0xF8)));
+    __m128 c_row_2 = _mm_or_ps( //
+        _mm_or_ps(_mm_dp_ps(a_row_2, b_col_0, 0xF1), _mm_dp_ps(a_row_2, b_col_1, 0xF2)),
+        _mm_or_ps(_mm_dp_ps(a_row_2, b_col_2, 0xF4), _mm_dp_ps(a_row_2, b_col_3, 0xF8)));
     _mm_storeu_ps(&c[2][0], c_row_2);
 
-    __m128 c_row_3 = _mm_or_ps(                //
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_3, b_col_0, 0xF1), //
-            _mm_dp_ps(a_row_3, b_col_1, 0xF2)),
-        _mm_or_ps(                             //
-            _mm_dp_ps(a_row_3, b_col_2, 0xF4), //
-            _mm_dp_ps(a_row_3, b_col_3, 0xF8)));
+    __m128 c_row_3 = _mm_or_ps( //
+        _mm_or_ps(_mm_dp_ps(a_row_3, b_col_0, 0xF1), _mm_dp_ps(a_row_3, b_col_1, 0xF2)),
+        _mm_or_ps(_mm_dp_ps(a_row_3, b_col_2, 0xF4), _mm_dp_ps(a_row_3, b_col_3, 0xF8)));
     _mm_storeu_ps(&c[3][0], c_row_3);
 }
 
@@ -919,7 +811,34 @@ static void f32_matrix_multiplication_4x4_loop_sse41(bm::State &state) {
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
+
+BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
 #endif // defined(__SSE2__)
+
+/**
+ *  The result is @b 18.8ns as opposed to the @b 11.1ns before. Turns out, we were not that smart.
+ *  If we disassemble the unrolled kernel, we can see, that the compiler was smart optimizing it.
+ *  Each line of that kernel is compiled to a snippet like:
+ *
+ *      vmovss  xmm0, dword ptr [rdi]
+ *      vmovss  xmm1, dword ptr [rdi + 4]
+ *      vmulss  xmm1, xmm1, dword ptr [rsi + 16]
+ *      vfmadd231ss     xmm1, xmm0, dword ptr [rsi]
+ *      vmovss  xmm0, dword ptr [rdi + 8]
+ *      vfmadd132ss     xmm0, xmm1, dword ptr [rsi + 32]
+ *      vmovss  xmm1, dword ptr [rdi + 12]
+ *      vfmadd132ss     xmm1, xmm0, dword ptr [rsi + 48]
+ *      vmovss  dword ptr [rdx], xmm1
+ *
+ *  Seeing the `vfmadd132ss` and `vfmadd231ss` instructions, applied to @b `xmm` registers clearly
+ *  indicates, that the compiler was smarter at using SIMD than we are, but the game isn't over.
+ *
+ *  @see Explore the unrolled kernel assembly on GodBolt: https://godbolt.org/z/bW5nnTKs1
+ *
+ *  Using AVX-512 on modern CPUs, we can fit an entire matrix in one @b `zmm` register, 512 bits wide.
+ *  That Instruction Set Extension is available on Intel Skylake-X, Ice Lake, and AMD Zen4 CPUs, and
+ *  has extremely powerful functionality.
+ */
 
 #if defined(__AVX512F__)
 #if defined(__GNUC__) && !defined(__clang__)
@@ -982,18 +901,214 @@ static void f32_matrix_multiplication_4x4_loop_avx512(bm::State &state) {
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
-#endif // defined(__AVX512F__)
-
-BENCHMARK(f32_matrix_multiplication_4x4_loop);
-BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
-#if defined(__SSE2__)
-BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
-#endif // defined(__SSE2__)
-#if defined(__AVX512F__)
 BENCHMARK(f32_matrix_multiplication_4x4_loop_avx512);
 #endif // defined(__AVX512F__)
 
 #pragma endregion // Compute vs Memory Bounds with Matrix Multiplications
+
+/**
+ *  When composing higher-level kernels from small tiled matrix multiplications, one of the most important
+ *  components is tiling the memory and minimizing the number of loads from RAM, maximizing cache utilization.
+ *  But not all loads are equal. If you are not careful, you'll end up with unaligned memory addresses, where
+ *  part of your data is in one cache line, and the other part is in another.
+ *
+ *  For large data-structures it's impossible to avoid such "split loads", but for small scalars, it's recommended.
+ *  Especially if you are designing a high-performance kernel and you choose the granularity of your processing.
+ *
+ *  On the majority of modern CPUs the cache line is 64 bytes wide, but its @b not always the case.
+ *  On Apple M-series CPUs, for example, the cache line is 128 bytes wide. That's why we can't just put @b `alignas(64)`
+ *  everywhere and magically expect total compatibility.
+ *
+ *  Instead, we need to infer some of those aspects at runtime and invoke kernels designed for different alignments.
+ *  To illustrate a point, let's go back to our `std::sort` function and apply it to a buffer of cache-line-sized,
+ *  aligned and intentionally misaligned objects, sorted by a single integer.
+ *
+ *  To implement it, we will:
+ *  - design a smart iterator that can access the elements with a given stride (offset multiple in bytes),
+ *  - use CRC32 as a cheap, but @b hard-to-predict alternative to increments, to produce a semi-random range to sort,
+ *  - use different Operating System APIs to infer the cache line size and the L2 cache size on the current machine,
+ *  - flush CPU caches between benchmark iterations, to ensure that the results are not skewed by the cache state.
+ */
+
+#pragma region Alignment of Memory Accesses
+
+struct memory_specs_t {
+    std::size_t l2_cache_size = 1024 * 1024; ///< Default to 1 MB
+    std::size_t cache_line_size = 64;        ///< Default to 64 bytes
+};
+
+/**
+ *  Takes a string like "64K" and "128M" and returns the corresponding size in bytes,
+ *  expanding the multiple prefixes to the actual size, like "65536" and "134217728", respectively.
+ */
+std::size_t parse_size_string(std::string const &str) {
+    std::size_t value = std::stoul(str);
+    if (str.find("K") != std::string::npos || str.find("k") != std::string::npos)
+        value *= 1024;
+    else if (str.find("M") != std::string::npos || str.find("m") != std::string::npos)
+        value *= 1024 * 1024;
+    else if (str.find("G") != std::string::npos || str.find("g") != std::string::npos)
+        value *= 1024 * 1024 * 1024;
+    return value;
+}
+
+std::size_t read_file_contents(std::string const &path) {
+    std::ifstream file(path);
+    std::string content;
+    if (!file.is_open())
+        return 0;
+    std::getline(file, content);
+    file.close();
+    return parse_size_string(content);
+}
+
+/**
+ *  Reading memory specs is platform-dependent. It can be done in different ways, like invoking x86 CPUID instructions,
+ *  to read the cache line size and the L2 cache size, but even on x86 the exact logic is different between AMD and
+ *  Intel. To avoid Assembly, one can use compiler intrinsics, but those differ between compilers and don't provide a
+ *  solution for Arm. Alternatively, we use Operating System APIs - different for Linux, MacOS, and Windows.
+ */
+memory_specs_t fetch_memory_specs() {
+    memory_specs_t specs;
+
+#if defined(__linux__)
+    // On Linux, we can read the cache line size and the L2 cache size from the "sysfs" virtual filesystem.
+    // It can provide the properties of each individual CPU core.
+    specs.cache_line_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size");
+    specs.l2_cache_size = read_file_contents("/sys/devices/system/cpu/cpu0/cache/index2/size");
+
+#elif defined(__APPLE__)
+    // On macOS, we can use the `sysctlbyname` function to read the `hw.cachelinesize` and `hw.l2cachesize` values
+    // into unsigned integers. You can achieve the same by using the `sysctl -a` command-line utility.
+    size_t size;
+    size_t len = sizeof(size);
+    if (sysctlbyname("hw.cachelinesize", &size, &len, nullptr, 0) == 0) {
+        specs.cache_line_size = size;
+    }
+    if (sysctlbyname("hw.l2cachesize", &size, &len, nullptr, 0) == 0) {
+        specs.l2_cache_size = size;
+    }
+
+#elif defined(_WIN32)
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION buffer[256];
+    DWORD len = sizeof(buffer);
+    if (GetLogicalProcessorInformation(buffer, &len)) {
+        for (size_t i = 0; i < len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION); ++i) {
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 2) {
+                specs.l2_cache_size = buffer[i].Cache.Size;
+            }
+            if (buffer[i].Relationship == RelationCache && buffer[i].Cache.Level == 1) {
+                specs.cache_line_size = buffer[i].Cache.LineSize;
+            }
+        }
+    }
+#endif
+
+    return specs;
+}
+
+/**
+ *  We implement a minimalistic strided pointer/iterator, that chooses the next element
+ *  address based on the runtime-known variable.
+ */
+template <typename value_type_> class strided_ptr {
+  public:
+    using value_type = value_type_;
+    using pointer = value_type_ *;
+    using reference = value_type_ &;
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::random_access_iterator_tag;
+
+    inline strided_ptr(std::byte *data, std::size_t stride_bytes) noexcept : data_(data), stride_(stride_bytes) {
+        assert(data_ && "Pointer must not be null, as NULL arithmetic is undefined");
+    }
+    inline reference operator*() const noexcept {
+        return *std::launder(std::assume_aligned<1>(reinterpret_cast<pointer>(data_)));
+    }
+    inline reference operator[](difference_type i) const noexcept {
+        return *std::launder(std::assume_aligned<1>(reinterpret_cast<pointer>(data_ + i * stride_)));
+    }
+
+    // clang-format off
+    inline pointer operator->() const noexcept { return &operator*(); }
+    inline strided_ptr &operator++() noexcept { data_ += stride_; return *this; }
+    inline strided_ptr operator++(int) noexcept { strided_ptr temp = *this; ++(*this); return temp; }
+    inline strided_ptr &operator--() noexcept { data_ -= stride_; return *this; }
+    inline strided_ptr operator--(int) noexcept { strided_ptr temp = *this; --(*this); return temp; }
+    inline strided_ptr &operator+=(difference_type offset) noexcept { data_ += offset * stride_; return *this; }
+    inline strided_ptr &operator-=(difference_type offset) noexcept { data_ -= offset * stride_; return *this; }
+    inline strided_ptr operator+(difference_type offset) noexcept { strided_ptr temp = *this; return temp += offset; }
+    inline strided_ptr operator-(difference_type offset) noexcept { strided_ptr temp = *this; return temp -= offset; }
+    inline friend difference_type operator-(strided_ptr const &a, strided_ptr const &b) noexcept { assert(a.stride_ == b.stride_); return (a.data_ - b.data_) / static_cast<difference_type>(a.stride_); }
+    inline friend bool operator==(strided_ptr const &a, strided_ptr const &b) noexcept { return a.data_ == b.data_; }
+    inline friend bool operator<(strided_ptr const &a, strided_ptr const &b) noexcept { return a.data_ < b.data_; }
+    inline friend bool operator!=(strided_ptr const &a, strided_ptr const &b) noexcept { return !(a == b); }
+    inline friend bool operator>(strided_ptr const &a, strided_ptr const &b) noexcept { return b < a; }
+    inline friend bool operator<=(strided_ptr const &a, strided_ptr const &b) noexcept { return !(b < a); }
+    inline friend bool operator>=(strided_ptr const &a, strided_ptr const &b) noexcept { return !(a < b); }
+    // clang-format on
+
+  private:
+    std::byte *data_;
+    std::size_t stride_;
+};
+
+template <bool aligned> static void memory_access(bm::State &state) {
+    memory_specs_t const memory_specs = fetch_memory_specs();
+    assert(                                                        //
+        memory_specs.l2_cache_size > 0 &&                          //
+        __builtin_popcountll(memory_specs.l2_cache_size) == 1 &&   //
+        __builtin_popcountll(memory_specs.cache_line_size) == 1 && //
+        "L2 cache size and cache line width must be a power of two greater than 0");
+
+    // We are using a fairly small L2-cache-sized buffer to show, that this is not just about Big Data.
+    // Anything beyond a few megabytes with irregular memory accesses may suffer from the same issues.
+    // For split-loads, pad our buffer with an extra `memory_specs.cache_line_size` bytes of space.
+    std::size_t const l2_buffer_size = memory_specs.l2_cache_size + memory_specs.cache_line_size;
+    std::unique_ptr<std::byte> l2_buffer;
+    l2_buffer.reset(reinterpret_cast<std::byte *>(std::aligned_alloc(memory_specs.cache_line_size, l2_buffer_size)));
+    std::byte *const l2_buffer_ptr = l2_buffer.get();
+
+    // Let's initialize a strided range using out `strided_ptr` template, but for `aligned == false`
+    // make sure that the scalar-of-interest in each stride is located exactly at the boundary between two cache lines.
+    std::size_t const offset_within_page = !aligned ? (memory_specs.cache_line_size - sizeof(std::uint32_t) / 2) : 0;
+    strided_ptr<std::uint32_t> integers(l2_buffer_ptr + offset_within_page, memory_specs.cache_line_size);
+
+    // We will start with a random seed position and walk through the buffer.
+    std::uint32_t semi_random_state = 0xFFFFFFFFu;
+    std::size_t const count_pages = memory_specs.l2_cache_size / memory_specs.cache_line_size;
+    for (auto _ : state) {
+        // Generate some semi-random data, using Knuth's multiplicative hash number derived from the golden ratio.
+        std::generate_n(integers, count_pages, [&semi_random_state] { return semi_random_state *= 2654435761u; });
+
+        // Flush all of the pages out of the cache
+        // The `__builtin___clear_cache(l2_buffer_ptr, l2_buffer_ptr + l2_buffer.size())`
+        // compiler intrinsic can't be used for the data cache, only the instructions cache.
+        // For Arm, GCC provides a `__aarch64_sync_cache_range` intrinsic, but it's not available in Clang.
+        for (std::size_t i = 0; i != count_pages; ++i)
+            _mm_clflush(&integers[i]);
+        bm::ClobberMemory();
+
+        std::sort(integers, integers + count_pages);
+    }
+}
+
+static void memory_access_unaligned(bm::State &state) { memory_access<false>(state); }
+static void memory_access_aligned(bm::State &state) { memory_access<true>(state); }
+
+BENCHMARK(memory_access_unaligned)->MinTime(10);
+BENCHMARK(memory_access_aligned)->MinTime(10);
+
+/**
+ *  One variant executes in 5.8 miliseconds, and the other in 5.2 miliseconds,
+ *  consistently resulting a @b 10% performance difference.
+ */
+
+#pragma endregion // Alignment of Memory Accesses
+
+#pragma region Non Uniform Memory Access
+
+#pragma endregion // Non Uniform Memory Access
 
 #pragma endregion // - Numerics
 
@@ -1013,46 +1128,22 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_avx512);
 
 #pragma endregion // - Abstractions
 
-// ------------------------------------
-// ## Cost of Control Flow
-// ------------------------------------
-
-// The `if` statement and seemingly innocent ternary operator (condition ? a : b)
-// can have a high for performance. It's especially noticeable, when conditional
-// execution is happening at the scale of single bytes, like in text processing,
-// parsing, search, compression, encoding, and so on.
-//
-// The CPU has a branch-predictor which is one of the most complex parts of the silicon.
-// It memorizes the most common `if` statements, to allow "speculative execution".
-// In other words, start processing the task (i + 1), before finishing the task (i).
-//
-// Those branch predictors are very powerful, and if you have a single `if` statement
-// on your hot-path, it's not a big deal. But most programs are almost entirely built
-// on `if` statements. On most modern CPUs up to 4096 branches will be memorized, but
-// anything that goes beyond that, would work slower - 2.9 ns vs 0.7 ns for the following snippet.
-static void cost_of_branching_for_different_depth(bm::State &state) {
-    auto count = static_cast<std::size_t>(state.range(0));
-    std::vector<std::int32_t> random_values(count);
-    std::generate_n(random_values.begin(), random_values.size(), &std::rand);
-    std::int32_t variable = 0;
-    std::size_t iteration = 0;
-    for (auto _ : state) {
-        std::int32_t random = random_values[(++iteration) & (count - 1)];
-        bm::DoNotOptimize(variable = (random & 1) ? (variable + random) : (variable * random));
-    }
+/// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
+/// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,
+/// without pre-computing some random ordering.
+///
+/// On x86, when SSE4.2 is available, the `crc32` instruction can be used. Both `CRC R32, R/M32` and `CRC32 R32, R/M64`
+/// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
+/// Check out @b https://uops.info/table for more details.
+inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
+#if defined(__SSE4_2__)
+    return _mm_crc32_u32(x, 0xFFFFFFFF);
+#elif defined(__ARM_FEATURE_CRC32)
+    return __crc32cw(x, 0xFFFFFFFF);
+#else
+    return x * 2654435761u;
+#endif
 }
-
-BENCHMARK(cost_of_branching_for_different_depth)->RangeMultiplier(4)->Range(256, 32 * 1024);
-
-// We don't have to generate a large array of random numbers to showcase the cost of branching.
-// Simple one-line statement can be enough to cause the same 2.2 ns slowdown.
-static void cost_of_branching_without_random_arrays(bm::State &state) {
-    std::int32_t a = std::rand(), b = std::rand(), c = 0;
-    for (auto _ : state)
-        bm::DoNotOptimize(c = (c & 1) ? ((a--) + (b)) : ((++b) - (a)));
-}
-
-BENCHMARK(cost_of_branching_without_random_arrays);
 
 /**
  *  The default variant is to invoke the `BENCHMARK_MAIN()` macro.

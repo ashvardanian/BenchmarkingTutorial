@@ -854,26 +854,22 @@ void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][
 
     __m512 a_vec_1 = _mm512_permute_ps(a_mat, 0x0);
     __m512 b_vec_1 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
-    __m512 c_row_1 = _mm512_mul_ps(a_vec_1, b_vec_1);
+    __m512 c_vec = _mm512_mul_ps(a_vec_1, b_vec_1);
 
     __m512 a_vec_2 = _mm512_permute_ps(a_mat, 0x55);
     b_mat = _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(b_mat), _mm512_castps_si512(b_mat), 0x2));
     __m512 b_vec_2 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
-    __m512 c_row_2 = _mm512_mul_ps(a_vec_2, b_vec_2);
+    c_vec = _mm512_fmadd_ps(a_vec_2, b_vec_2, c_vec);
 
     __m512 a_vec_3 = _mm512_permute_ps(a_mat, 0xAA);
     b_mat = _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(b_mat), _mm512_castps_si512(b_mat), 0x2));
     __m512 b_vec_3 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
-    __m512 c_row_3 = _mm512_mul_ps(a_vec_3, b_vec_3);
+    c_vec = _mm512_fmadd_ps(a_vec_3, b_vec_3, c_vec);
 
     __m512 a_vec_4 = _mm512_permute_ps(a_mat, 0xFF);
     b_mat = _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(b_mat), _mm512_castps_si512(b_mat), 0x2));
     __m512 b_vec_4 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
-    __m512 c_row_4 = _mm512_mul_ps(a_vec_4, b_vec_4);
-
-    __m512 c_row_12 = _mm512_add_ps(c_row_1, c_row_2);
-    __m512 c_row_34 = _mm512_add_ps(c_row_3, c_row_4);
-    __m512 c_vec = _mm512_add_ps(c_row_12, c_row_34);
+    c_vec = _mm512_fmadd_ps(a_vec_4, b_vec_4, c_vec);
 
     _mm512_storeu_ps(&c[0][0], c_vec);
 }

@@ -852,6 +852,7 @@ BENCHMARK(f32x4x4_matmul_sse41);
  *  indicates, that the compiler was smarter at using SIMD than we are, but the game isn't over.
  *
  *  @see Explore the unrolled kernel assembly on GodBolt: https://godbolt.org/z/bW5nnTKs1
+ *  @see Explore instruction latencies on the @b uops.info: https://uops.info/table.html
  *
  *  Using AVX-512 on modern CPUs, we can fit an entire matrix in one @b `zmm` register, 512 bits wide.
  *  That Instruction Set Extension is available on Intel Skylake-X, Ice Lake, and AMD Zen4 CPUs, and
@@ -935,7 +936,7 @@ BENCHMARK(f32x4x4_matmul_avx512);
  *
  *  To implement it, we will:
  *  - design a smart iterator that can access the elements with a given stride (offset multiple in bytes),
- *  - use CRC32 as a cheap, but @b hard-to-predict alternative to increments, to produce a semi-random range to sort,
+ *  - use Knuth's multiplicative hash to generate a semi-random sequence of integers,
  *  - use different Operating System APIs to infer the cache line size and the L2 cache size on the current machine,
  *  - flush CPU caches between benchmark iterations, to ensure that the results are not skewed by the cache state.
  */
@@ -1425,7 +1426,7 @@ BENCHMARK(pipeline_cpp20_ranges);
  *      - pipeline_cpp20_coroutines:   @b 449ns
  *      - pipeline_cpp20_ranges:       @b 223ns
  *
- *  Why?
+ *  TODO: Why?
  */
 
 #pragma endregion // Ranges and Iterators
@@ -1438,6 +1439,7 @@ BENCHMARK(pipeline_cpp20_ranges);
 #pragma region Virtual Functions and Polymorphism
 
 #include <memory> // `std::unique_ptr`
+
 struct base_virtual_class {
     virtual ~base_virtual_class() = default;
     virtual void process(std::vector<std::uint64_t> &data) const = 0;
@@ -1516,28 +1518,37 @@ static void pipeline_virtual_functions(bm::State &state) {
 
 BENCHMARK(pipeline_virtual_functions);
 
+/**
+ *  This code is a bio-hazard for many reasons:
+ *
+ *  - A couple of "feature releases" later, the code will become a spaghetti monster.
+ *    Each layer of inheritance and interfaces will add its APIs and constraints,
+ *    until at some point you'll need to skip-connect grand-kids to grand-parents.
+ *
+ *  - It uses dynamic memory allocations on hot paths. Their costs are amortized in
+ *    a repeated benchmark, as practically the same region is allocated and deallocated
+ *    and no fragmentation occurs. In the real world, this is not the case.
+ *    Some allocation will happen before the deallocation of the previous one is complete,
+ *    and your allocator is stuck approximating non-trivial optimization problems with
+ *    all kinds of heuristics.
+ *
+ *  - Using such constructs to build Abstract Syntax Trees or other complex data structures
+ *    almost universally leads to using `std::any`, arrays of strings, or even JSONs to
+ *    pass around the data in the most generic way possible. That curse results in your
+ *    CPU spending most of the time packing & unpacking data, or stalling the ALUs while
+ *    chasing rogue pointers.
+ *
+ *  This example is so systemically bad, that after reading the previous sections,
+ *  you don't want to continue investigating it. After all, we are not writing a paper
+ *  for some grant, so instead of wasting time on clearly bad ideas to prove they are bad,
+ *  let's just move on to clearly good ideas.
+ *
+ *  Feel free to contribute!
+ */
+
 #pragma endregion // Virtual Functions and Polymorphism
 
 #pragma endregion // - Abstractions
-
-#if 0
-/// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
-/// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,
-/// without pre-computing some random ordering.
-///
-/// On x86, when SSE4.2 is available, the `crc32` instruction can be used. Both `CRC R32, R/M32` and `CRC32 R32, R/M64`
-/// have a latency of 3 cycles on practically all Intel and AMD CPUs,  and can execute only on one port.
-/// Check out @b https://uops.info/table for more details.
-inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
-#if defined(__SSE4_2__)
-    return _mm_crc32_u32(x, 0xFFFFFFFF);
-#elif defined(__ARM_FEATURE_CRC32)
-    return __crc32cw(x, 0xFFFFFFFF);
-#else
-    return x * 2654435761u;
-#endif
-}
-#endif
 
 /**
  *  The default variant is to invoke the `BENCHMARK_MAIN()` macro.

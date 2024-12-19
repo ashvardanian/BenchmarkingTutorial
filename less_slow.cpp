@@ -662,7 +662,7 @@ struct f32x4x4_t {
     float scalars[4][4];
 };
 
-f32x4x4_t f32x4x4_multiplication_loop_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
+f32x4x4_t f32x4x4_matmul_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
     f32x4x4_t c;
     for (std::size_t i = 0; i != 4; ++i)
         for (std::size_t j = 0; j != 4; ++j) {
@@ -674,19 +674,19 @@ f32x4x4_t f32x4x4_multiplication_loop_kernel(f32x4x4_t const &a, f32x4x4_t const
     return c;
 }
 
-static void f32x4x4_multiplication_loop(bm::State &state) {
+static void f32x4x4_matmul(bm::State &state) {
     f32x4x4_t a, b, c;
     std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
     std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
 
     for (auto _ : state)
-        bm::DoNotOptimize(c = f32x4x4_multiplication_loop_kernel(a, b));
+        bm::DoNotOptimize(c = f32x4x4_matmul_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
-BENCHMARK(f32x4x4_multiplication_loop);
+BENCHMARK(f32x4x4_matmul);
 
 /**
  *  A multiplication of two NxN inputs takes up to NxNxN multiplications and NxNx(N-1) additions.
@@ -701,7 +701,7 @@ BENCHMARK(f32x4x4_multiplication_loop);
  *  of the @b three nested `for` loops. Let's manually express all the operations.
  */
 
-f32x4x4_t f32x4x4_multiplication_loop_unrolled_kernel(f32x4x4_t const &a_matrix, f32x4x4_t const &b_matrix) {
+f32x4x4_t f32x4x4_matmul_unrolled_kernel(f32x4x4_t const &a_matrix, f32x4x4_t const &b_matrix) {
     f32x4x4_t c_matrix;
     float const(&a)[4][4] = a_matrix.scalars;
     float const(&b)[4][4] = b_matrix.scalars;
@@ -730,19 +730,19 @@ f32x4x4_t f32x4x4_multiplication_loop_unrolled_kernel(f32x4x4_t const &a_matrix,
     return c_matrix;
 }
 
-static void f32x4x4_multiplication_loop_unrolled(bm::State &state) {
+static void f32x4x4_matmul_unrolled(bm::State &state) {
     f32x4x4_t a, b, c;
     std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
     std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
 
     for (auto _ : state)
-        bm::DoNotOptimize(c = f32x4x4_multiplication_loop_unrolled_kernel(a, b));
+        bm::DoNotOptimize(c = f32x4x4_matmul_unrolled_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
-BENCHMARK(f32x4x4_multiplication_loop_unrolled);
+BENCHMARK(f32x4x4_matmul_unrolled);
 
 /**
  *  The unrolled variant executes in @b 11ns, or a @b 3x speedup.
@@ -765,7 +765,7 @@ BENCHMARK(f32x4x4_multiplication_loop_unrolled);
 #pragma clang attribute push(__attribute__((target("sse2,sse3,sse4.1"))), apply_to = function)
 #endif
 
-f32x4x4_t f32x4x4_multiplication_loop_sse41_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
+f32x4x4_t f32x4x4_matmul_sse41_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
     f32x4x4_t c;
     // Load a continuous vector of 4x floats in a single instruction., invoked by the `_mm_loadu_ps` intrinsic.
     __m128 a_row_0 = _mm_loadu_ps(&a.scalars[0][0]);
@@ -816,19 +816,19 @@ f32x4x4_t f32x4x4_multiplication_loop_sse41_kernel(f32x4x4_t const &a, f32x4x4_t
 #pragma clang attribute pop
 #endif
 
-static void f32x4x4_multiplication_loop_sse41(bm::State &state) {
+static void f32x4x4_matmul_sse41(bm::State &state) {
     f32x4x4_t a, b, c;
     std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
     std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
 
     for (auto _ : state)
-        bm::DoNotOptimize(c = f32x4x4_multiplication_loop_sse41_kernel(a, b));
+        bm::DoNotOptimize(c = f32x4x4_matmul_sse41_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
-BENCHMARK(f32x4x4_multiplication_loop_sse41);
+BENCHMARK(f32x4x4_matmul_sse41);
 #endif // defined(__SSE2__)
 
 /**
@@ -856,7 +856,7 @@ BENCHMARK(f32x4x4_multiplication_loop_sse41);
  *  has extremely powerful functionality.
  */
 
-#if defined(__AVX512F__) && 0
+#if defined(__AVX512F__)
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC push_options
 #pragma GCC target("avx2", "avx512f", "avx512bw", "avx512vl", "bmi2")
@@ -864,80 +864,32 @@ BENCHMARK(f32x4x4_multiplication_loop_sse41);
 #pragma clang attribute push(__attribute__((target("avx2,avx512f,avx512bw,avx512vl,bmi2"))), apply_to = function)
 #endif
 
-inline __m512 mm512_shift_add(__m512 v, int shift_w) {
-    return _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(v), _mm512_castps_si512(v), shift_w));
-}
+f32x4x4_t f32x4x4_matmul_avx512_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
+    __m512 a_mat = _mm512_loadu_ps(&a.scalars[0][0]);
+    __m512 b_mat = _mm512_loadu_ps(&b.scalars[0][0]);
 
-void f32x4x4_multiplication_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
-    __m512 a_mat = _mm512_loadu_ps(&a[0][0]);
-    __m512 b_mat = _mm512_loadu_ps(&b[0][0]);
+    __m512 a_vec_1 = _mm512_permute_ps(a_mat, 0x0);
+    __m512 b_vec_1 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
+    __m512 c_vec = _mm512_mul_ps(a_vec_1, b_vec_1);
 
-    __m512i trans_perm = _mm512_setr_epi32( //
-        0, 4, 8, 12,                        //
-        1, 5, 9, 13,                        //
-        2, 6, 10, 14,                       //
-        3, 7, 11, 15                        //
-    );
+    __m512 a_vec_2 = _mm512_permute_ps(a_mat, 0x55);
+    b_mat = _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(b_mat), _mm512_castps_si512(b_mat), 0x2));
+    __m512 b_vec_2 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
+    c_vec = _mm512_fmadd_ps(a_vec_2, b_vec_2, c_vec);
 
-    // Begin calculation for the First C Row
-    __m512 a_row_1_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
-    __m512 a_row_1_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_1_broad);
-    __m512 c_row_1 = _mm512_mul_ps(a_row_1_broad_trans, b_mat);
+    __m512 a_vec_3 = _mm512_permute_ps(a_mat, 0xAA);
+    b_mat = _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(b_mat), _mm512_castps_si512(b_mat), 0x2));
+    __m512 b_vec_3 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
+    c_vec = _mm512_fmadd_ps(a_vec_3, b_vec_3, c_vec);
 
-    // Perform two shift-add operations to comput first C row
-    __m512 c_row_1_rot = mm512_shift_add(c_row_1, 0x4);
-    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
-    c_row_1_rot = mm512_shift_add(c_row_1, 0x2);
+    __m512 a_vec_4 = _mm512_permute_ps(a_mat, 0xFF);
+    b_mat = _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(b_mat), _mm512_castps_si512(b_mat), 0x2));
+    __m512 b_vec_4 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
+    c_vec = _mm512_fmadd_ps(a_vec_4, b_vec_4, c_vec);
 
-    // This vector will hold the accumulated rows for the result C matrix
-    c_row_1 = _mm512_add_ps(c_row_1, c_row_1_rot);
-
-    // Begin calculation for the Second C Row
-    a_mat = mm512_shift_add(a_mat, 0x2);
-    __m512 a_row_2_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
-    __m512 a_row_2_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_2_broad);
-    __m512 c_row_2 = _mm512_mul_ps(a_row_2_broad_trans, b_mat);
-
-    // Perform two shift-add operations to compute second C row
-    __m512 c_row_2_rot = mm512_shift_add(a_mat, 0x4);
-    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
-    c_row_2_rot = mm512_shift_add(c_row_2, 0x2);
-    c_row_2 = _mm512_add_ps(c_row_2, c_row_2_rot);
-
-    // Blend lanes 4 to 7 of `c_row_2` into resulting vector
-    c_row_1 = _mm512_mask_blend_ps(0xF0, c_row_1, c_row_2);
-
-    // Begin calculation for Third C Row
-    a_mat = mm512_shift_add(a_mat, 0x2);
-    __m512 a_row_3_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
-    __m512 a_row_3_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_3_broad);
-    __m512 c_row_3 = _mm512_mul_ps(a_row_3_broad_trans, b_mat);
-
-    // Perform two shift-add operations to compute third C row
-    __m512 c_row_3_rot = mm512_shift_add(c_row_3, 0x4);
-    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
-    c_row_3_rot = mm512_shift_add(c_row_3, 0x2);
-    c_row_3 = _mm512_add_ps(c_row_3, c_row_3_rot);
-
-    // Blend lanes 8 to 11 of `c_row_3` into resulting vector
-    c_row_1 = _mm512_mask_blend_ps(0xF00, c_row_1, c_row_3);
-
-    // Begin calculation for Fourth C Row
-    a_mat = mm512_shift_add(a_mat, 0x2);
-    __m512 a_row_4_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
-    __m512 a_row_4_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_4_broad);
-    __m512 c_row_4 = _mm512_mul_ps(a_row_4_broad_trans, b_mat);
-
-    // Perform two shift-add operations to compute fourth C row
-    __m512 c_row_4_rot = mm512_shift_add(c_row_4, 0x4);
-    c_row_4 = _mm512_add_ps(c_row_4, c_row_4_rot);
-    c_row_4_rot = mm512_shift_add(c_row_4, 0x2);
-    c_row_4 = _mm512_add_ps(c_row_4, c_row_4_rot);
-
-    // Blend the last 12 to 15 lanes of `c_row_4` into resulting vector
-    c_row_1 = _mm512_mask_blend_ps(0xF000, c_row_1, c_row_4);
-
-    _mm512_storeu_ps(&c[0][0], c_row_1);
+    alignas(64) f32x4x4_t c;
+    _mm512_store_ps(&c.scalars[0][0], c_vec);
+    return c;
 }
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -946,19 +898,18 @@ void f32x4x4_multiplication_loop_avx512_kernel(float a[4][4], float b[4][4], flo
 #pragma clang attribute pop
 #endif
 
-static void f32x4x4_multiplication_loop_avx512(bm::State &state) {
-    float a[4][4], b[4][4], c[4][4];
-    std::iota(&a[0][0], &a[0][0] + 16, 16);
-    std::iota(&b[0][0], &b[0][0] + 16, 0);
-    for (auto _ : state) {
-        f32x4x4_multiplication_loop_avx512_kernel(a, b, c);
-        bm::DoNotOptimize(c);
-    }
+static void f32x4x4_matmul_avx512(bm::State &state) {
+    f32x4x4_t a, b, c;
+    std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
+    std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
+
+    for (auto _ : state)
+        bm::DoNotOptimize(c = f32x4x4_matmul_avx512_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
-BENCHMARK(f32x4x4_multiplication_loop_avx512);
+BENCHMARK(f32x4x4_matmul_avx512);
 #endif // defined(__AVX512F__)
 
 #pragma endregion // Compute vs Memory Bounds with Matrix Multiplications

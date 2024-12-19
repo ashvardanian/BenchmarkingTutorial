@@ -93,7 +93,7 @@ BENCHMARK(i32_addition_paused);
 
 /**
  *  Those `PauseTiming` and `ResumeTiming` functions, however, are not free either.
- *  In current implementation, they can easily take @b ~127 ns, or around 300 CPU cycles.
+ *  In current implementation, they can easily take @b ~127 ns, or around 150 CPU cycles.
  *  Clearly useless in our case, but there is a good reusable recipe!
  *
  *  A typical pattern when implementing a benchmark is to initialize with a random value, and then
@@ -132,7 +132,7 @@ BENCHMARK(i32_addition_random)->Threads(8);
 BENCHMARK(i32_addition_randomly_initialized)->Threads(8);
 
 /**
- *  The `std::rand` variant latency jumped from @b 100ns in single-threaded mode to @b 12'000ns in multi-threaded,
+ *  The `std::rand` variant latency jumped from @b 15ns in single-threaded mode to @b 12'000ns in multi-threaded,
  *  while our latest variant remained the same.
  *
  *  Like many other LibC functions, it depends on the global state and uses mutexes to synchronize concurrent
@@ -261,9 +261,9 @@ BENCHMARK_CAPTURE(sorting_with_executors, par_unseq, std::execution::par_unseq)
  *  This would output not just the timings for each input size, but also the inferred complexity:
  *
  *      sorting_with_executors/seq/1048576/min_time:10.000/real_time            5776408 ns      5776186 ns
- *      sorting_with_executors/seq/4194304/min_time:10.000/real_time           25323450 ns     25322993 ns
- *      sorting_with_executors/seq/16777216/min_time:10.000/real_time         109073782 ns    109073030 ns
- *      sorting_with_executors/seq/67108864/min_time:10.000/real_time         482794630 ns    482777617 ns
+ *      sorting_with_executors/seq/4194154/min_time:10.000/real_time           25323450 ns     2532153 ns
+ *      sorting_with_executors/seq/16777216/min_time:10.000/real_time         109073782 ns    109071515 ns
+ *      sorting_with_executors/seq/67108864/min_time:10.000/real_time         482794615 ns    482777617 ns
  *      sorting_with_executors/seq/268435456/min_time:10.000/real_time       2548725384 ns   2548695506 ns
  *      sorting_with_executors/seq/min_time:10.000/real_time_BigO                  0.34 NlgN       0.34 NlgN
  *      sorting_with_executors/seq/min_time:10.000/real_time_RMS                      8 %             8 %
@@ -840,7 +840,7 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
  *  has extremely powerful functionality.
  */
 
-#if defined(__AVX512F__)
+#if defined(__AVX512F__) && 0
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC push_options
 #pragma GCC target("avx2", "avx512f", "avx512bw", "avx512vl", "bmi2")
@@ -849,12 +849,7 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
 #endif
 
 inline __m512 mm512_shift_add(__m512 v, int shift_w) {
-    return _mm512_castsi512_ps(
-        _mm512_alignr_epi64(
-            _mm512_castps_si512(v), 
-            _mm512_castps_si512(v),
-            shift_w)
-    );
+    return _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(v), _mm512_castps_si512(v), shift_w));
 }
 
 void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
@@ -868,7 +863,7 @@ void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][
         3, 7, 11, 15                        //
     );
 
-    // Begin calculatation for the First C Row
+    // Begin calculation for the First C Row
     __m512 a_row_1_broad = _mm512_broadcast_f32x4(_mm512_castps512_ps128(a_mat));
     __m512 a_row_1_broad_trans = _mm512_permutexvar_ps(trans_perm, a_row_1_broad);
     __m512 c_row_1 = _mm512_mul_ps(a_row_1_broad_trans, b_mat);
@@ -1148,53 +1143,102 @@ std::size_t parse_size_string(std::string const &str) {
  *
  *  Let's imagine an abstract numeric pipeline:
  *
- *    1. Generate a sequence of all integers in a specific range (e.g., [1, 100])
+ *    1. Generate a sequence of all integers in a specific range (e.g., [1, 33])
  *    2. Filter to keep only the integer squares
  *    3. Expand each square into its prime factors
  *    4. Accumulate (sum) all prime factors of all resulting numbers
  *
  *  We will use a few different approaches to implement this pipeline:
  *
- *    - Simple C++ 11 codebase using `template` function arguments.
- *    - C++ 20 coroutines with a minimalistic generator
+ *    - C++ 11 variant using `template` for lambda function arguments.
+ *    - C++ 11 variant using `std::function` for lambda function arguments.
+ *    - C++ 20 coroutines with a minimalistic generator.
+ *    - C++ 20 ranges with a lazily-evaluated factors stream.
  */
 
 #pragma region - Pipelines and Abstractions
 
-inline bool is_integer_square(std::uint64_t x) noexcept {
-    std::uint64_t root = static_cast<std::uint64_t>(std::sqrt(x));
-    return root * root == x;
+inline bool is_power_of_two(std::uint64_t x) noexcept { return __builtin_popcountll(x) == 1; }
+
+inline bool is_power_of_three(std::uint64_t x) noexcept {
+    constexpr std::uint64_t max_power_of_three = 4052555151518976267;
+    return x > 0 && max_power_of_three % x == 0;
 }
 
 #pragma region Coroutines and Asynchronous Programming
 
 template <typename callback_type_>
-static void for_range_cpp11(std::uint64_t start, std::uint64_t end, callback_type_ &&callback) {
-    for (std::uint64_t i = start; i <= end; ++i)
-        callback(i);
-}
-
-template <typename callback_type_>
-static void generate_prime_factors_cpp11(std::uint64_t input, callback_type_ &&callback) {
-    for (std::uint64_t p = 2; p * p <= input; ++p)
-        while (input % p == 0)
-            callback(p), input /= p;
+inline void prime_factors_cpp11(std::uint64_t input, callback_type_ &&callback) noexcept {
+    for (std::uint64_t factor = 2; factor * factor <= input; ++factor)
+        while (input % factor == 0) {
+            callback(factor);
+            input /= factor;
+        }
     if (input > 1)
         callback(input);
 }
 
-static void pipeline_cpp11_callback(bm::State &state) {
+static void pipeline_cpp11_lambdas(bm::State &state) {
+    std::uint64_t sum = 0, count = 0;
     for (auto _ : state) {
-        std::uint64_t sum = 0;
-        for_range_cpp11(3, 100, [&](std::uint64_t value) {
-            if (is_integer_square(value))
-                generate_prime_factors_cpp11(value, [&](std::uint64_t factor) { sum += factor; });
+        sum = 0, count = 0;
+        for (std::uint64_t value = 3; value <= 33; ++value) {
+            if (!is_power_of_two(value) && !is_power_of_three(value))
+                prime_factors_cpp11(value, [&](std::uint64_t factor) { sum += factor, count++; });
+        }
+        bm::DoNotOptimize(sum);
+    }
+    state.counters["sum"] = sum;
+    state.counters["count"] = count;
+}
+
+BENCHMARK(pipeline_cpp11_lambdas);
+
+/**
+ *  The more conventional approach is to avoid template meta-programming and use `std::function` callbacks.
+ *  Each of those function objects will be heap-allocated.
+ */
+static void for_range_stl(std::uint64_t start, std::uint64_t end, std::function<void(std::uint64_t)> const &callback) {
+    for (std::uint64_t i = start; i <= end; ++i)
+        callback(i);
+}
+
+static void filter_stl( //
+    std::uint64_t value, std::function<bool(std::uint64_t)> const &predicate,
+    std::function<void(std::uint64_t)> const &callback) {
+    if (!predicate(value))
+        callback(value);
+}
+
+static void prime_factors_stl(std::uint64_t input, std::function<void(std::uint64_t)> const &callback) {
+    for (std::uint64_t factor = 2; factor * factor <= input; ++factor) {
+        while (input % factor == 0) {
+            callback(factor);
+            input /= factor;
+        }
+    }
+    if (input > 1)
+        callback(input);
+}
+
+static void pipeline_cpp11_stl(bm::State &state) {
+    std::uint64_t sum = 0, count = 0;
+    for (auto _ : state) {
+        sum = 0, count = 0;
+        for_range_stl(3, 33, [&](std::uint64_t value) {
+            filter_stl(value, is_power_of_two, [&](std::uint64_t value) {
+                filter_stl(value, is_power_of_three, [&](std::uint64_t value) {
+                    prime_factors_stl(value, [&](std::uint64_t factor) { sum += factor, count++; });
+                });
+            });
         });
         bm::DoNotOptimize(sum);
     }
+    state.counters["sum"] = sum;
+    state.counters["count"] = count;
 }
 
-BENCHMARK(pipeline_cpp11_callback);
+BENCHMARK(pipeline_cpp11_stl);
 
 /**
  *  C++20 introduces coroutines in the language, but not in the library, so we need to
@@ -1248,45 +1292,165 @@ template <typename integer_type_> struct integer_generator {
     iterator end() noexcept { return {nullptr}; }
 };
 
-// Step 1: Generate integers in a range
-integer_generator<std::uint64_t> for_range(std::uint64_t start, std::uint64_t end) noexcept {
-    for (std::uint64_t i = start; i <= end; ++i)
-        co_yield i;
+integer_generator<std::uint64_t> for_range_generator(std::uint64_t start, std::uint64_t end) noexcept {
+    for (std::uint64_t value = start; value <= end; ++value)
+        co_yield value;
 }
 
-// Step 2: Filter integer squares
-integer_generator<std::uint64_t> filter_integer_squares(integer_generator<std::uint64_t> input) noexcept {
-    for (auto v : input)
-        if (is_integer_square(v))
-            co_yield v;
+integer_generator<std::uint64_t> filter_generator( //
+    integer_generator<std::uint64_t> values, bool (*predicate)(std::uint64_t)) noexcept {
+    for (auto value : values)
+        if (!predicate(value))
+            co_yield value;
 }
 
-// Step 3: Generate prime factors
-integer_generator<std::uint64_t> generate_prime_factors(std::uint64_t input) noexcept {
-    for (std::uint64_t p = 2; p * p <= input; ++p) {
-        while (input % p == 0) {
-            co_yield p;
-            input /= p;
+integer_generator<std::uint64_t> prime_factors_generator(integer_generator<std::uint64_t> values) noexcept {
+    for (std::uint64_t value : values) {
+        for (std::uint64_t factor = 2; factor * factor <= value; ++factor) {
+            while (value % factor == 0) {
+                co_yield factor;
+                value /= factor;
+            }
         }
+        if (value > 1)
+            co_yield value;
     }
-    if (input > 1)
-        co_yield input;
 }
 
 static void pipeline_cpp20_coroutines(bm::State &state) {
+    std::uint64_t sum = 0, count = 0;
     for (auto _ : state) {
-        std::uint64_t sum = 0;
-        for (auto value : filter_integer_squares(for_range(3, 100)))
-            for (auto factor : generate_prime_factors(value))
-                sum += factor;
+        auto range = for_range_generator(3, 33);
+        auto filtered = filter_generator(filter_generator(std::move(range), is_power_of_two), is_power_of_three);
+        auto factors = prime_factors_generator(std::move(filtered));
+        // Reduce
+        sum = 0, count = 0;
+        for (auto factor : factors)
+            sum += factor, count++;
         bm::DoNotOptimize(sum);
     }
+    state.counters["sum"] = sum;
+    state.counters["count"] = count;
 }
 
 BENCHMARK(pipeline_cpp20_coroutines);
 
 /**
- *  The C++20 coroutines variant executes in @b 473ns, while the native C++11 variant takes @b 236ns.
+ *  C++20 ranges bring powerful tools to the language, but can be extremely hard to debug.
+ *  It's definitely recommended to override default compiler settings with `-fconcepts-diagnostics-depth=10`
+ *  to make meta-compilation errors more readable.
+ *
+ *  It's also hard to use STL with non-homogeneous ranges, where the begin and end iterators are of different types.
+ *  The end iterator is often an empty "sentinel" object, like the `std::default_sentinel_t`, but many of the STL
+ *  concepts don't recognize such ranges as valid, and the following assertions will fail:
+ *
+ *      static_assert(std::ranges::view<prime_factor_view>);
+ *      static_assert(std::ranges::input_range<prime_factor_view>);
+ *
+ *  This will result in some key transformations being impossible to perform, like the `std::views::join` operation.
+ */
+#include <iterator> // `std::input_iterator_tag`
+#include <ranges>   // `std::ranges`
+
+class prime_factor_view : public std::ranges::view_interface<prime_factor_view> {
+  private:
+    std::uint64_t number_ = 0;
+
+  public:
+    prime_factor_view() noexcept {}
+    explicit prime_factor_view(std::uint64_t n) noexcept : number_(n) {}
+
+    class iterator {
+        std::uint64_t number_ = 0;
+        std::uint64_t factor_ = 0;
+
+        inline void advance() noexcept {
+            while (factor_ * factor_ <= number_) {
+                if (number_ % factor_ == 0) {
+                    number_ /= factor_;
+                    return;
+                }
+                ++factor_;
+            }
+            if (number_ > 1) {
+                factor_ = number_; // The last entry
+                number_ = 0;
+            } else {
+                factor_ = 0; // Mark as end
+            }
+        }
+
+      public:
+        using value_type = std::uint64_t;
+        using difference_type = std::ptrdiff_t;
+        using iterator_category = std::input_iterator_tag;
+        using iterator_concept = std::input_iterator_tag;
+
+        iterator() = default;
+        iterator(std::uint64_t n) noexcept : number_(n), factor_(2) { advance(); }
+        std::uint64_t operator*() const noexcept { return factor_; }
+        iterator &operator++() noexcept {
+            advance();
+            return *this;
+        }
+        iterator operator++(int) noexcept {
+            iterator temp = *this;
+            ++(*this);
+            return temp;
+        }
+
+        bool operator==(iterator const &other) const noexcept { return factor_ == other.factor_; }
+        bool operator!=(iterator const &other) const noexcept { return factor_ != other.factor_; }
+    };
+
+    iterator begin() const noexcept { return iterator(number_); }
+    iterator end() const noexcept { return iterator(); }
+};
+
+static_assert(std::ranges::view<prime_factor_view>, "prime_factor_view must model std::ranges::view");
+static_assert(std::ranges::input_range<prime_factor_view>, "prime_factor_view must model std::ranges::input_range");
+
+/**
+ *  @brief  Inverts the output of a boolean-returning function.
+ *          Useful for search predicates.
+ */
+template <typename function_type_> auto not_fn(function_type_ f) noexcept {
+    return [f](auto &&...args) { return !f(std::forward<decltype(args)>(args)...); };
+}
+
+static void pipeline_cpp20_ranges(bm::State &state) {
+    std::uint64_t sum = 0, count = 0;
+    for (auto _ : state) {
+        auto pipeline =                                                                   //
+            std::views::iota(std::uint64_t{3}, std::uint64_t{33 + 1}) |                   //
+            std::views::filter(not_fn(is_power_of_two)) |                                 //
+            std::views::filter(not_fn(is_power_of_three)) |                               //
+            std::views::transform([](std::uint64_t x) { return prime_factor_view(x); }) | //
+            std::views::join;
+
+        // Interestingly, STL still struggles with non-homogeneous ranges, x
+        // iterator iterators are of different types.
+        //      std::uint64_t sum = std::accumulate(pipeline.begin(), pipeline.end(), std::uint64_t{0});
+        sum = 0, count = 0;
+        for (std::uint64_t factor : pipeline)
+            sum += factor, count++;
+        bm::DoNotOptimize(sum);
+    }
+    state.counters["sum"] = sum;
+    state.counters["count"] = count;
+}
+
+BENCHMARK(pipeline_cpp20_ranges);
+
+/**
+ *  The results are as follows:
+ *
+ *      - pipeline_cpp11_lambdas:      @b 324ns
+ *      - pipeline_cpp11_stl:          @b 474ns
+ *      - pipeline_cpp20_coroutines:   @b 449ns
+ *      - pipeline_cpp20_ranges:       @b 223ns
+ *
+ *  Why?
  */
 
 #pragma endregion // Coroutines and Asynchronous Programming

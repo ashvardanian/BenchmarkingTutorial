@@ -657,7 +657,7 @@ BENCHMARK(bits_population_count_core_i7);
 
 #pragma region Compute vs Memory Bounds with Matrix Multiplications
 
-void f32_matrix_multiplication_4x4_loop_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+void f32_matrix_multiplication_4x4_loop_kernel(float a[4][4], float b[4][4], float (&c)[4][4]) {
     for (std::size_t i = 0; i != 4; ++i)
         for (std::size_t j = 0; j != 4; ++j) {
             float vector_product = 0;
@@ -695,7 +695,7 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop);
  *  of the @b three nested `for` loops. Let's manually express all the operations.
  */
 
-void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4][4], float (&c)[4][4]) {
     c[0][0] = a[0][0] * b[0][0] + a[0][1] * b[1][0] + a[0][2] * b[2][0] + a[0][3] * b[3][0];
     c[0][1] = a[0][0] * b[0][1] + a[0][1] * b[1][1] + a[0][2] * b[2][1] + a[0][3] * b[3][1];
     c[0][2] = a[0][0] * b[0][2] + a[0][1] * b[1][2] + a[0][2] * b[2][2] + a[0][3] * b[3][2];
@@ -751,7 +751,7 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
 #pragma clang attribute push(__attribute__((target("sse2,sse3,sse4.1"))), apply_to = function)
 #endif
 
-void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4], float (&c)[4][4]) {
     // Load a continuous vector of 4x floats in a single instruction., invoked by the `_mm_loadu_ps` intrinsic.
     __m128 a_row_0 = _mm_loadu_ps(&a[0][0]);
     __m128 a_row_1 = _mm_loadu_ps(&a[1][0]);
@@ -852,7 +852,7 @@ inline __m512 mm512_shift_add(__m512 v, int shift_w) {
     return _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(v), _mm512_castps_si512(v), shift_w));
 }
 
-void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][4], float (&c)[4][4]) {
     __m512 a_mat = _mm512_loadu_ps(&a[0][0]);
     __m512 b_mat = _mm512_loadu_ps(&b[0][0]);
 

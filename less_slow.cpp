@@ -887,8 +887,8 @@ f32x4x4_t f32x4x4_matmul_avx512_kernel(f32x4x4_t const &a, f32x4x4_t const &b) n
     __m512 b_vec_4 = _mm512_broadcast_f32x4(_mm512_castps512_ps128(b_mat));
     c_vec = _mm512_fmadd_ps(a_vec_4, b_vec_4, c_vec);
 
-    alignas(64) f32x4x4_t c;
-    _mm512_store_ps(&c.scalars[0][0], c_vec);
+    f32x4x4_t c;
+    _mm512_storeu_ps(&c.scalars[0][0], c_vec);
     return c;
 }
 

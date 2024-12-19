@@ -663,14 +663,16 @@ struct f32x4x4_t {
 };
 
 f32x4x4_t f32x4x4_matmul_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
-    f32x4x4_t c;
-    for (std::size_t i = 0; i != 4; ++i)
+    f32x4x4_t c{};
+    // This code gets auto-vectorized regardless of the loop order,
+    // be it "ijk", "ikj", "jik", "jki", "kij", or "kji".
+    for (std::size_t i = 0; i != 4; ++i) {
         for (std::size_t j = 0; j != 4; ++j) {
-            float vector_product = 0;
-            for (std::size_t k = 0; k != 4; ++k)
-                vector_product += a.scalars[i][k] * b.scalars[k][j];
-            c.scalars[i][j] = vector_product;
+            for (std::size_t k = 0; k != 4; ++k) {
+                c.scalars[i][j] += a.scalars[i][k] * b.scalars[k][j];
+            }
         }
+    }
     return c;
 }
 

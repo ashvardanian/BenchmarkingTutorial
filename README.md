@@ -25,7 +25,7 @@ If you are familiar with C++ and want to go through code and measurements as you
 ```sh
 git clone https://github.com/ashvardanian/LessSlow.cpp.git  # Clone the repository
 cd LessSlow.cpp                                             # Change the directory
-cmake -B build_release -DCMAKE_BUILD_TYPE=Release           # Generate the build files
+cmake -B build_release -D CMAKE_BUILD_TYPE=Release          # Generate the build files
 cmake --build build_release --config Release                # Build the project
 build_release/less_slow                                     # Run the benchmarks
 ```

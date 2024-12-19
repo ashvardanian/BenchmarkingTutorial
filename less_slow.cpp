@@ -1319,21 +1319,21 @@ BENCHMARK(pipeline_cpp20_coroutines);
  *  The end iterator is often an empty "sentinel" object, like the `std::default_sentinel_t`, but many of the STL
  *  concepts don't recognize such ranges as valid, and the following assertions will fail:
  *
- *      static_assert(std::ranges::view<prime_factor_view>);
- *      static_assert(std::ranges::input_range<prime_factor_view>);
+ *      static_assert(std::ranges::view<prime_factors_view>);
+ *      static_assert(std::ranges::input_range<prime_factors_view>);
  *
  *  This will result in some key transformations being impossible to perform, like the `std::views::join` operation.
  */
 #include <iterator> // `std::input_iterator_tag`
 #include <ranges>   // `std::ranges`
 
-class prime_factor_view : public std::ranges::view_interface<prime_factor_view> {
+class prime_factors_view : public std::ranges::view_interface<prime_factors_view> {
   private:
     std::uint64_t number_ = 0;
 
   public:
-    prime_factor_view() noexcept {}
-    explicit prime_factor_view(std::uint64_t n) noexcept : number_(n) {}
+    prime_factors_view() noexcept {}
+    explicit prime_factors_view(std::uint64_t n) noexcept : number_(n) {}
 
     class iterator {
         std::uint64_t number_ = 0;
@@ -1382,8 +1382,8 @@ class prime_factor_view : public std::ranges::view_interface<prime_factor_view> 
     iterator end() const noexcept { return iterator(); }
 };
 
-static_assert(std::ranges::view<prime_factor_view>, "prime_factor_view must model std::ranges::view");
-static_assert(std::ranges::input_range<prime_factor_view>, "prime_factor_view must model std::ranges::input_range");
+static_assert(std::ranges::view<prime_factors_view>, "prime_factors_view must model std::ranges::view");
+static_assert(std::ranges::input_range<prime_factors_view>, "prime_factors_view must model std::ranges::input_range");
 
 /**
  *  @brief  Inverts the output of a boolean-returning function.
@@ -1396,11 +1396,11 @@ template <typename function_type_> auto not_fn(function_type_ f) noexcept {
 static void pipeline_cpp20_ranges(bm::State &state) {
     std::uint64_t sum = 0, count = 0;
     for (auto _ : state) {
-        auto pipeline =                                                                   //
-            std::views::iota(std::uint64_t{3}, std::uint64_t{33 + 1}) |                   //
-            std::views::filter(not_fn(is_power_of_two)) |                                 //
-            std::views::filter(not_fn(is_power_of_three)) |                               //
-            std::views::transform([](std::uint64_t x) { return prime_factor_view(x); }) | //
+        auto pipeline =                                                                    //
+            std::views::iota(std::uint64_t{3}, std::uint64_t{33 + 1}) |                    //
+            std::views::filter(not_fn(is_power_of_two)) |                                  //
+            std::views::filter(not_fn(is_power_of_three)) |                                //
+            std::views::transform([](std::uint64_t x) { return prime_factors_view(x); }) | //
             std::views::join;
 
         // Interestingly, STL still struggles with non-homogeneous ranges, x

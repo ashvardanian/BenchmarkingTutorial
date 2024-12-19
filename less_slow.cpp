@@ -1430,7 +1430,91 @@ BENCHMARK(pipeline_cpp20_ranges);
 
 #pragma endregion // Ranges and Iterators
 
+/**
+ *  Now that we know how to write performant modern code, let's just show how not to do it.
+ *  Ironically, that's the kind of code most universities teach, and most companies use.
+ *  If you see it at a potential workplace - run :)
+ */
 #pragma region Virtual Functions and Polymorphism
+
+#include <memory> // `std::unique_ptr`
+struct base_virtual_class {
+    virtual ~base_virtual_class() = default;
+    virtual void process(std::vector<std::uint64_t> &data) const = 0;
+};
+
+class for_range_virtual : public base_virtual_class {
+    std::uint64_t start_, end_;
+
+  public:
+    for_range_virtual(std::uint64_t start, std::uint64_t end) : start_(start), end_(end) {}
+    void process(std::vector<std::uint64_t> &data) const override {
+        data.clear();
+        for (std::uint64_t value = start_; value <= end_; ++value)
+            data.push_back(value);
+    }
+};
+
+class filter_virtual : public base_virtual_class {
+    bool (*predicate_)(std::uint64_t);
+
+  public:
+    filter_virtual(bool (*predicate)(std::uint64_t)) : predicate_(predicate) {}
+    void process(std::vector<std::uint64_t> &data) const override {
+        data.erase(std::remove_if(data.begin(), data.end(), predicate_), data.end());
+    }
+};
+
+class prime_factors_virtual : public base_virtual_class {
+    void process(std::vector<std::uint64_t> &data) const override {
+        std::vector<std::uint64_t> expanded;
+        for (auto input : data) {
+            std::uint64_t value = input;
+            for (std::uint64_t factor = 2; factor * factor <= value; ++factor) {
+                while (value % factor == 0) {
+                    expanded.push_back(factor);
+                    value /= factor;
+                }
+            }
+            if (value > 1)
+                expanded.push_back(value);
+        }
+        data.swap(expanded);
+    }
+};
+
+class homogeneous_virtual_pipeline : public base_virtual_class {
+  private:
+    std::vector<std::unique_ptr<base_virtual_class>> stages_;
+
+  public:
+    void add_stage(std::unique_ptr<base_virtual_class> stage) { stages_.push_back(std::move(stage)); }
+    void process(std::vector<std::uint64_t> &data) const override {
+        for (auto const &stage : stages_)
+            stage->process(data);
+    }
+};
+
+static void pipeline_virtual_functions(bm::State &state) {
+    homogeneous_virtual_pipeline pipeline;
+    pipeline.add_stage(std::make_unique<for_range_virtual>(3, 33));
+    pipeline.add_stage(std::make_unique<filter_virtual>(is_power_of_two));
+    pipeline.add_stage(std::make_unique<filter_virtual>(is_power_of_three));
+    pipeline.add_stage(std::make_unique<prime_factors_virtual>());
+
+    std::uint64_t sum = 0, count = 0;
+    for (auto _ : state) {
+        std::vector<std::uint64_t> data;
+        pipeline.process(data);
+        sum = std::accumulate(data.begin(), data.end(), std::uint64_t{0});
+        count = data.size();
+        bm::DoNotOptimize(sum);
+    }
+    state.counters["sum"] = sum;
+    state.counters["count"] = count;
+}
+
+BENCHMARK(pipeline_virtual_functions);
 
 #pragma endregion // Virtual Functions and Polymorphism
 

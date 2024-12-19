@@ -8,7 +8,6 @@
 #include <cmath>     // `std::pow`
 #include <cstdint>   // `std::int32_t`
 #include <cstring>   // `std::memcpy`, `std::strcmp`
-#include <execution> // `std::execution::par_unseq`
 #include <fstream>   // `std::ifstream`
 #include <iterator>  // `std::random_access_iterator_tag`
 #include <memory>    // `std::assume_aligned`
@@ -213,6 +212,7 @@ BENCHMARK(sorting)->Args({8196, false})->Args({8196, true});
  */
 
 #if defined(__cpp_lib_parallel_algorithm)
+#include <execution> // `std::execution::par_unseq`
 
 template <typename execution_policy_> static void sorting_with_executors(bm::State &state, execution_policy_ &&policy) {
 
@@ -300,15 +300,16 @@ template <typename element_at> struct quick_sort_partition_gt {
 
     std::size_t operator()(element_t *arr, std::size_t low, std::size_t high) noexcept {
         element_t pivot = arr[high];
-        std::size_t i = low - 1;
-        for (std::size_t j = low; j <= high - 1; j++) {
+        std::ptrdiff_t i = static_cast<std::ptrdiff_t>(low) - 1;
+        std::ptrdiff_t j_last = static_cast<std::ptrdiff_t>(high) - 1;
+        for (std::ptrdiff_t j = low; j <= j_last; j++) {
             if (arr[j] >= pivot)
                 continue;
             i++;
             std::swap(arr[i], arr[j]);
         }
         std::swap(arr[i + 1], arr[high]);
-        return i + 1;
+        return static_cast<std::size_t>(i + 1);
     }
 };
 
@@ -657,30 +658,35 @@ BENCHMARK(bits_population_count_core_i7);
 
 #pragma region Compute vs Memory Bounds with Matrix Multiplications
 
-void f32_matrix_multiplication_4x4_loop_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+struct f32x4x4_t {
+    float scalars[4][4];
+};
+
+f32x4x4_t f32x4x4_multiplication_loop_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
+    f32x4x4_t c;
     for (std::size_t i = 0; i != 4; ++i)
         for (std::size_t j = 0; j != 4; ++j) {
             float vector_product = 0;
             for (std::size_t k = 0; k != 4; ++k)
-                vector_product += a[i][k] * b[k][j];
-            c[i][j] = vector_product;
+                vector_product += a.scalars[i][k] * b.scalars[k][j];
+            c.scalars[i][j] = vector_product;
         }
+    return c;
 }
 
-static void f32_matrix_multiplication_4x4_loop(bm::State &state) {
-    float a[4][4], b[4][4], c[4][4];
-    std::iota(&a[0][0], &a[0][0] + 16, 16);
-    std::iota(&b[0][0], &b[0][0] + 16, 0);
-    for (auto _ : state) {
-        f32_matrix_multiplication_4x4_loop_kernel(a, b, c);
-        bm::DoNotOptimize(c);
-    }
+static void f32x4x4_multiplication_loop(bm::State &state) {
+    f32x4x4_t a, b, c;
+    std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
+    std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
+
+    for (auto _ : state)
+        bm::DoNotOptimize(c = f32x4x4_multiplication_loop_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
-BENCHMARK(f32_matrix_multiplication_4x4_loop);
+BENCHMARK(f32x4x4_multiplication_loop);
 
 /**
  *  A multiplication of two NxN inputs takes up to NxNxN multiplications and NxNx(N-1) additions.
@@ -695,7 +701,12 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop);
  *  of the @b three nested `for` loops. Let's manually express all the operations.
  */
 
-void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+f32x4x4_t f32x4x4_multiplication_loop_unrolled_kernel(f32x4x4_t const &a_matrix, f32x4x4_t const &b_matrix) {
+    f32x4x4_t c_matrix;
+    float const(&a)[4][4] = a_matrix.scalars;
+    float const(&b)[4][4] = b_matrix.scalars;
+    float(&c)[4][4] = c_matrix.scalars;
+
     c[0][0] = a[0][0] * b[0][0] + a[0][1] * b[1][0] + a[0][2] * b[2][0] + a[0][3] * b[3][0];
     c[0][1] = a[0][0] * b[0][1] + a[0][1] * b[1][1] + a[0][2] * b[2][1] + a[0][3] * b[3][1];
     c[0][2] = a[0][0] * b[0][2] + a[0][1] * b[1][2] + a[0][2] * b[2][2] + a[0][3] * b[3][2];
@@ -715,22 +726,23 @@ void f32_matrix_multiplication_4x4_loop_unrolled_kernel(float a[4][4], float b[4
     c[3][1] = a[3][0] * b[0][1] + a[3][1] * b[1][1] + a[3][2] * b[2][1] + a[3][3] * b[3][1];
     c[3][2] = a[3][0] * b[0][2] + a[3][1] * b[1][2] + a[3][2] * b[2][2] + a[3][3] * b[3][2];
     c[3][3] = a[3][0] * b[0][3] + a[3][1] * b[1][3] + a[3][2] * b[2][3] + a[3][3] * b[3][3];
+
+    return c_matrix;
 }
 
-static void f32_matrix_multiplication_4x4_loop_unrolled(bm::State &state) {
-    float a[4][4], b[4][4], c[4][4];
-    std::iota(&a[0][0], &a[0][0] + 16, 16);
-    std::iota(&b[0][0], &b[0][0] + 16, 0);
-    for (auto _ : state) {
-        f32_matrix_multiplication_4x4_loop_unrolled_kernel(a, b, c);
-        bm::DoNotOptimize(c);
-    }
+static void f32x4x4_multiplication_loop_unrolled(bm::State &state) {
+    f32x4x4_t a, b, c;
+    std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
+    std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
+
+    for (auto _ : state)
+        bm::DoNotOptimize(c = f32x4x4_multiplication_loop_unrolled_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
-BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
+BENCHMARK(f32x4x4_multiplication_loop_unrolled);
 
 /**
  *  The unrolled variant executes in @b 11ns, or a @b 3x speedup.
@@ -744,6 +756,8 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
  */
 
 #if defined(__SSE2__)
+#include <smmintrin.h> // `_mm_dp_ps` and `_MM_TRANSPOSE4_PS`
+
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC push_options
 #pragma GCC target("sse2", "sse3", "sse4.1")
@@ -751,19 +765,20 @@ BENCHMARK(f32_matrix_multiplication_4x4_loop_unrolled);
 #pragma clang attribute push(__attribute__((target("sse2,sse3,sse4.1"))), apply_to = function)
 #endif
 
-void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+f32x4x4_t f32x4x4_multiplication_loop_sse41_kernel(f32x4x4_t const &a, f32x4x4_t const &b) noexcept {
+    f32x4x4_t c;
     // Load a continuous vector of 4x floats in a single instruction., invoked by the `_mm_loadu_ps` intrinsic.
-    __m128 a_row_0 = _mm_loadu_ps(&a[0][0]);
-    __m128 a_row_1 = _mm_loadu_ps(&a[1][0]);
-    __m128 a_row_2 = _mm_loadu_ps(&a[2][0]);
-    __m128 a_row_3 = _mm_loadu_ps(&a[3][0]);
+    __m128 a_row_0 = _mm_loadu_ps(&a.scalars[0][0]);
+    __m128 a_row_1 = _mm_loadu_ps(&a.scalars[1][0]);
+    __m128 a_row_2 = _mm_loadu_ps(&a.scalars[2][0]);
+    __m128 a_row_3 = _mm_loadu_ps(&a.scalars[3][0]);
 
     // Load the columns of the matrix B, by loading the 4 rows and then transposing with an SSE macro:
     // https://randombit.net/bitbashing/posts/integer_matrix_transpose_in_sse2.html
-    __m128 b_col_0 = _mm_loadu_ps(&b[0][0]);
-    __m128 b_col_1 = _mm_loadu_ps(&b[1][0]);
-    __m128 b_col_2 = _mm_loadu_ps(&b[2][0]);
-    __m128 b_col_3 = _mm_loadu_ps(&b[3][0]);
+    __m128 b_col_0 = _mm_loadu_ps(&b.scalars[0][0]);
+    __m128 b_col_1 = _mm_loadu_ps(&b.scalars[1][0]);
+    __m128 b_col_2 = _mm_loadu_ps(&b.scalars[2][0]);
+    __m128 b_col_3 = _mm_loadu_ps(&b.scalars[3][0]);
     _MM_TRANSPOSE4_PS(b_col_0, b_col_1, b_col_2, b_col_3);
 
     // Multiply A rows by B columns and store the result in C.
@@ -775,22 +790,24 @@ void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4
     __m128 c_row_0 = _mm_or_ps( //
         _mm_or_ps(_mm_dp_ps(a_row_0, b_col_0, 0xF1), _mm_dp_ps(a_row_0, b_col_1, 0xF2)),
         _mm_or_ps(_mm_dp_ps(a_row_0, b_col_2, 0xF4), _mm_dp_ps(a_row_0, b_col_3, 0xF8)));
-    _mm_storeu_ps(&c[0][0], c_row_0);
+    _mm_storeu_ps(&c.scalars[0][0], c_row_0);
 
     __m128 c_row_1 = _mm_or_ps( //
         _mm_or_ps(_mm_dp_ps(a_row_1, b_col_0, 0xF1), _mm_dp_ps(a_row_1, b_col_1, 0xF2)),
         _mm_or_ps(_mm_dp_ps(a_row_1, b_col_2, 0xF4), _mm_dp_ps(a_row_1, b_col_3, 0xF8)));
-    _mm_storeu_ps(&c[1][0], c_row_1);
+    _mm_storeu_ps(&c.scalars[1][0], c_row_1);
 
     __m128 c_row_2 = _mm_or_ps( //
         _mm_or_ps(_mm_dp_ps(a_row_2, b_col_0, 0xF1), _mm_dp_ps(a_row_2, b_col_1, 0xF2)),
         _mm_or_ps(_mm_dp_ps(a_row_2, b_col_2, 0xF4), _mm_dp_ps(a_row_2, b_col_3, 0xF8)));
-    _mm_storeu_ps(&c[2][0], c_row_2);
+    _mm_storeu_ps(&c.scalars[2][0], c_row_2);
 
     __m128 c_row_3 = _mm_or_ps( //
         _mm_or_ps(_mm_dp_ps(a_row_3, b_col_0, 0xF1), _mm_dp_ps(a_row_3, b_col_1, 0xF2)),
         _mm_or_ps(_mm_dp_ps(a_row_3, b_col_2, 0xF4), _mm_dp_ps(a_row_3, b_col_3, 0xF8)));
-    _mm_storeu_ps(&c[3][0], c_row_3);
+    _mm_storeu_ps(&c.scalars[3][0], c_row_3);
+
+    return c;
 }
 
 #if defined(__GNUC__) && !defined(__clang__)
@@ -799,20 +816,19 @@ void f32_matrix_multiplication_4x4_loop_sse41_kernel(float a[4][4], float b[4][4
 #pragma clang attribute pop
 #endif
 
-static void f32_matrix_multiplication_4x4_loop_sse41(bm::State &state) {
-    float a[4][4], b[4][4], c[4][4];
-    std::iota(&a[0][0], &a[0][0] + 16, 16);
-    std::iota(&b[0][0], &b[0][0] + 16, 0);
-    for (auto _ : state) {
-        f32_matrix_multiplication_4x4_loop_sse41_kernel(a, b, c);
-        bm::DoNotOptimize(c);
-    }
+static void f32x4x4_multiplication_loop_sse41(bm::State &state) {
+    f32x4x4_t a, b, c;
+    std::iota(&a.scalars[0][0], &a.scalars[0][0] + 16, 16);
+    std::iota(&b.scalars[0][0], &b.scalars[0][0] + 16, 0);
+
+    for (auto _ : state)
+        bm::DoNotOptimize(c = f32x4x4_multiplication_loop_sse41_kernel(a, b));
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
 
-BENCHMARK(f32_matrix_multiplication_4x4_loop_sse41);
+BENCHMARK(f32x4x4_multiplication_loop_sse41);
 #endif // defined(__SSE2__)
 
 /**
@@ -852,7 +868,7 @@ inline __m512 mm512_shift_add(__m512 v, int shift_w) {
     return _mm512_castsi512_ps(_mm512_alignr_epi64(_mm512_castps_si512(v), _mm512_castps_si512(v), shift_w));
 }
 
-void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
+void f32x4x4_multiplication_loop_avx512_kernel(float a[4][4], float b[4][4], float c[4][4]) {
     __m512 a_mat = _mm512_loadu_ps(&a[0][0]);
     __m512 b_mat = _mm512_loadu_ps(&b[0][0]);
 
@@ -930,19 +946,19 @@ void f32_matrix_multiplication_4x4_loop_avx512_kernel(float a[4][4], float b[4][
 #pragma clang attribute pop
 #endif
 
-static void f32_matrix_multiplication_4x4_loop_avx512(bm::State &state) {
+static void f32x4x4_multiplication_loop_avx512(bm::State &state) {
     float a[4][4], b[4][4], c[4][4];
     std::iota(&a[0][0], &a[0][0] + 16, 16);
     std::iota(&b[0][0], &b[0][0] + 16, 0);
     for (auto _ : state) {
-        f32_matrix_multiplication_4x4_loop_avx512_kernel(a, b, c);
+        f32x4x4_multiplication_loop_avx512_kernel(a, b, c);
         bm::DoNotOptimize(c);
     }
 
     std::size_t flops_per_cycle = 4 * 4 * 4 * 2 /* 1 addition and 1 multiplication */;
     state.SetItemsProcessed(flops_per_cycle * state.iterations());
 }
-BENCHMARK(f32_matrix_multiplication_4x4_loop_avx512);
+BENCHMARK(f32x4x4_multiplication_loop_avx512);
 #endif // defined(__AVX512F__)
 
 #pragma endregion // Compute vs Memory Bounds with Matrix Multiplications
@@ -1198,6 +1214,8 @@ BENCHMARK(pipeline_cpp11_lambdas);
  *  The more conventional approach is to avoid template meta-programming and use `std::function` callbacks.
  *  Each of those function objects will be heap-allocated.
  */
+#include <functional> // `std::function`
+
 static void for_range_stl(std::uint64_t start, std::uint64_t end, std::function<void(std::uint64_t)> const &callback) {
     for (std::uint64_t i = start; i <= end; ++i)
         callback(i);
@@ -1335,6 +1353,10 @@ static void pipeline_cpp20_coroutines(bm::State &state) {
 
 BENCHMARK(pipeline_cpp20_coroutines);
 
+#pragma endregion // Coroutines and Asynchronous Programming
+
+#pragma region Ranges and Iterators
+
 /**
  *  C++20 ranges bring powerful tools to the language, but can be extremely hard to debug.
  *  It's definitely recommended to override default compiler settings with `-fconcepts-diagnostics-depth=10`
@@ -1453,10 +1475,6 @@ BENCHMARK(pipeline_cpp20_ranges);
  *  Why?
  */
 
-#pragma endregion // Coroutines and Asynchronous Programming
-
-#pragma region Ranges and Iterators
-
 #pragma endregion // Ranges and Iterators
 
 #pragma region Virtual Functions and Polymorphism
@@ -1465,6 +1483,7 @@ BENCHMARK(pipeline_cpp20_ranges);
 
 #pragma endregion // - Abstractions
 
+#if 0
 /// Calling `std::rand` is clearly expensive, but in some cases we need a semi-random behaviour.
 /// A relatively cheap and widely available alternative is to use CRC32 hashes to define the transformation,
 /// without pre-computing some random ordering.
@@ -1481,6 +1500,7 @@ inline std::uint32_t crc32_hash(std::uint32_t x) noexcept {
     return x * 2654435761u;
 #endif
 }
+#endif
 
 /**
  *  The default variant is to invoke the `BENCHMARK_MAIN()` macro.
